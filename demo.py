@@ -293,10 +293,10 @@ def ITD(data: list[numpy.float64]) -> ( list[numpy.float64]):
     while 1:
         counter = counter + 1
         L1, H1 = itd_baseline_extract(xx)
-        numpy.vstack(H, H1)
+        H = numpy.vstack(H, H1)
         STOP = stop_iter(xx, counter, N_max, E_x)
         if STOP:
-            numpy.append(H, L1)
+            H = numpy.vstack(H, L1)
             break
         xx[:] = L1[:]
 
