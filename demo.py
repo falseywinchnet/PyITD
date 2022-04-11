@@ -120,6 +120,9 @@ def shift3dximg(arr: list[numpy.float32], num: int, fill_value: list[numpy.float
 def detect_peaks(x, mph=None, mpd=1, threshold=0, edge='rising',
                  kpsh=False, valley=False, show=False, ax=None):
     """Detect peaks in data based on their amplitude and other features.
+    __author__ = "Marcos Duarte, https://github.com/demotu/BMC"
+    __version__ = "1.0.4"
+    __license__ = "MIT"
     Parameters
     ----------
     x : 1D array_like
@@ -282,15 +285,15 @@ def ITD(data: list[numpy.float64]) -> ( list[numpy.float64]):
     N_max = 10
     H = []
     L1 = []
-    H1 = []
+    H1 = numpy.empty
     xx = working_set.transpose()
     E_x = numpy.square(working_set) # same thing as E_x=sum(x.^2);
     counter = 0
     STOP = False
     while 1:
         counter = counter + 1
-        list [L1, H1] = itd_baseline_extract(xx)
-        numpy.append(H, H1)
+        L1, H1 = itd_baseline_extract(xx)
+        numpy.vstack(H, H1)
         STOP = stop_iter(xx, counter, N_max, E_x)
         if STOP:
             numpy.append(H, L1)
@@ -300,7 +303,7 @@ def ITD(data: list[numpy.float64]) -> ( list[numpy.float64]):
     with numba.objmode(start=numba.float64):
        start = time.time()
 
-    return data
+    return xx
 
 
 
@@ -365,8 +368,8 @@ def itd_baseline_extract(x: list[numpy.float64]) -> (list[numpy.float64], list[n
 
     Lk1=  numpy.vstack(idx_min, Lk1)  #Lk1=[idx_min(:),Lk1(:)];
     #this line means create a matrix(an array in 2d) and stack each element in it's own row
-    Lk2=numpy.vstack([idx_max,*Lk2])
-    Lk=numpy.vstack([Lk1,*Lk2])
+    Lk2=numpy.vstack([idx_max,Lk2])
+    Lk=numpy.vstack([Lk1,Lk2])
     #https://www.mathworks.com/matlabcentral/answers/73735-what-does-it-mean-by-writing-idx-in-code
     #~ means discard the first output of the sort function
     #which means it only wants the VALUES to be in LK_col_2
