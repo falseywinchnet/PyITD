@@ -275,14 +275,8 @@ def ITD(data: list[numpy.float64]) -> ( list[numpy.float64]):
     #function H=itd(x)
     N_max = 10;
     working_set = numpy.zeros_like(data)
-    working_set[:] = data [:]
+    working_set[:] = data[:]
 
-   # xx = working_set xx=x(:)'; this does numpy.concatanate and then something else idk
-    E_x = sum(working_set.dot())
-
-
-
-    N_max = 10
     H = []
     L1 = []
     H1 = numpy.empty
@@ -308,51 +302,59 @@ def ITD(data: list[numpy.float64]) -> ( list[numpy.float64]):
 
 
 def stop_iter(xx,counter,N_max,E_x) -> (bool):
-    STOP = False
     if (counter>N_max):
-        STOP=True
-    return
+        return True
 
-    Exx=sum(xx.dot())
-    if (Exx<=0.01*E_x):
-        STOP=True
-        return
+    Exx=numpy.square(xx)
+    if (Exx<=0.01 * E_x):
+        return True
     #https://blog.ytotech.com/2015/11/01/findpeaks-in-python/ we may want to switch
     #to the PeakUtils interpolate function for better results
     #however, since there is no filtering going on here, we will use Marcos Duarte's code
     pks1= detect_peaks(xx)
     pks2= detect_peaks(-xx)
-    pks= set.union(pks1,pks2)
-    if length((pks)<=7):
-        STOP=True
-        return
-    return
+    pks= set.union(pks1, pks2)
+    if (len(pks)<=7):
+        return True
+    return False
+
+#"""% Matlab Written by Linshan Jia (jialinshan123@126.com)
+#% Xi'an Jiaotong University
+#% Version 1.0.0
+#% 2018-11-04"""
+
 
 def itd_baseline_extract(x: list[numpy.float64]) -> (list[numpy.float64], list[numpy.float64]):
 
+
+
+
     working_set = numpy.zeros_like(x)
-    working_set[:] = numpy.transpose(x)
+    working_set[:] = numpy.transpose(x) #x=x(:)';
     t = range(working_set.shape[0]) # t=1:length(x); should do the same as this
 
 
-    alpha=0.5;
-    [val_max, idx_max]= detect_peaks(x)
-    [val_min, idx_min]= detect_peaks(-x)
-    idx_cb=set.union(idx_max,idx_min)
-    val_min=-val_min
+    alpha=0.5
+    val_max, idx_max= detect_peaks(x)
+    val_min, idx_min= detect_peaks(-x)
+    idx_cb= set.union(idx_max,idx_min)
+    val_min= -val_min
     if (min(idx_max)<min(idx_min)):
-        idx_min=[idx_max[0],idx_min]
-        val_min= [val_min[0],val_min]
+        idx_min = numpy.append(idx_max[0,:],idx_min[:])
+        val_min = numpy.append(val_min[0,:],val_min[:])
+
     elif ( min(idx_max)> min(idx_min)):
-        idx_max=[idx_min[0],idx_max]
-        val_max=[val_max[0],val_max]
+        idx_max=numpy.append(idx_min[0],idx_max[:])
+        val_max=numpy.append(val_max[0],val_max[:])
 
     if (max(idx_max)>max(idx_min)):
-        idx_min=[idx_min,idx_max[-1]]
-        val_min=[val_min, val_min[-1]]
+        idx_min=numpy.append(idx_min[:],idx_max[-1])
+        val_min=numpy.append(val_min[:], val_min[-1])
     elif (max(idx_max)< max(idx_min)):
-        idx_max=[idx_max,idx_min[-1]]
-        val_max=[val_max, val_max[-1]]
+        idx_max=numpy.append(idx_max[:],idx_min[-1])
+        val_max=numpy.append(val_max[:], val_max[-1])
+
+
     H = numpy.zeros_like(x)
     L = numpy.zeros_like(x)
 
@@ -374,6 +376,20 @@ def itd_baseline_extract(x: list[numpy.float64]) -> (list[numpy.float64], list[n
     #~ means discard the first output of the sort function
     #which means it only wants the VALUES to be in LK_col_2
     Lk_col_2 = numpy.sort(Lk, axis= 0) # sort by first axis?
+
+    #TODO: I am confident down to here.
+    #Lk_sorted=Lk(Lk_col_2,:);
+    #Lk=Lk_sorted(2:end-1,:);
+    #Lk=[[1,Lk(1,2)];Lk;[length(x),Lk(end,2)]];
+    #%% compute the Lt curve
+    #idx_Xk=[1,idx_cb,length(x)];
+    #L=zeros(1,length(x));
+    #for i=1:length(idx_Xk)-1 
+    #for j=idx_Xk(i):idx_Xk(i+1)
+    #    kij=(Lk(i+1,2)-Lk(i,2))/(x(idx_Xk(i+1))-x(idx_Xk(i))); %compute the slope K
+    #    L(j)=Lk(i,2)+kij*(x(j)-x(idx_Xk(i)));
+    #end
+    
     Lk_sorted=Lk[Lk_col_2,:]
     Lk=Lk_sorted[1:-1,:]
     #Lk=[[1,Lk(1,2)];Lk;[working_set.shape[0],Lk[:-1,2]]
@@ -382,6 +398,9 @@ def itd_baseline_extract(x: list[numpy.float64]) -> (list[numpy.float64], list[n
         for j in range (idx_Xk[i],idx_Xk[i+1]):
             kij=(Lk[i+1,2]-Lk[i,2])/(x(idx_Xk[i+1])-x(idx_Xk[i])) #$compute the slope K
             L[j]=Lk[i,2]+kij*(x[j]-x(idx_Xk[i]))
+
+
+    #TODO: I am confident below here.
 
     H= [i for i in working_set if i not in L]
     return L,H
