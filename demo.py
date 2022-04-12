@@ -331,7 +331,7 @@ def itd_baseline_extract(x: list[numpy.float64]) -> (list[numpy.float64], list[n
 
     working_set = numpy.zeros_like(x)
     working_set[:] = numpy.transpose(x) #x=x(:)';
-    t = range(working_set.shape[0]) # t=1:length(x); should do the same as this
+    t = range(working_set[0].shape) # t=1:length(x); should do the same as this
 
 
     alpha=0.5
@@ -370,37 +370,38 @@ def itd_baseline_extract(x: list[numpy.float64]) -> (list[numpy.float64], list[n
 
     Lk1=  numpy.vstack(idx_min, Lk1)  #Lk1=[idx_min(:),Lk1(:)];
     #this line means create a matrix(an array in 2d) and stack each element in it's own row
-    Lk2=numpy.vstack([idx_max,Lk2])
-    Lk=numpy.vstack([Lk1,Lk2])
+    Lk2=numpy.vstack(idx_max,Lk2)
+    Lk=numpy.vstack(Lk1,Lk2)
     #https://www.mathworks.com/matlabcentral/answers/73735-what-does-it-mean-by-writing-idx-in-code
     #~ means discard the first output of the sort function
-    #which means it only wants the VALUES to be in LK_col_2
-    Lk_col_2 = numpy.sort(Lk, axis= 0) # sort by first axis?
+    #which means it only wants the index
+    Lk_col_2 = numpy.argsort(Lk, axis= 0) # sort by first axis?
 
+    Lk_sorted= Lk[Lk_col_2,:] #Lk_sorted=Lk(Lk_col_2,:);
+
+
+    Lk=Lk_sorted[1:-1,:]
     #TODO: I am confident down to here.
-    #Lk_sorted=Lk(Lk_col_2,:);
-    #Lk=Lk_sorted(2:end-1,:);
+
     #Lk=[[1,Lk(1,2)];Lk;[length(x),Lk(end,2)]];
     #%% compute the Lt curve
-    #idx_Xk=[1,idx_cb,length(x)];
+
+    idx_Xk=[1,idx_cb,len(x)];
     #L=zeros(1,length(x));
-    #for i=1:length(idx_Xk)-1 
+    #for i=1:length(idx_Xk)-1
     #for j=idx_Xk(i):idx_Xk(i+1)
     #    kij=(Lk(i+1,2)-Lk(i,2))/(x(idx_Xk(i+1))-x(idx_Xk(i))); %compute the slope K
     #    L(j)=Lk(i,2)+kij*(x(j)-x(idx_Xk(i)));
     #end
-    
-    Lk_sorted=Lk[Lk_col_2,:]
-    Lk=Lk_sorted[1:-1,:]
-    #Lk=[[1,Lk(1,2)];Lk;[working_set.shape[0],Lk[:-1,2]]
-    idx_Xk=[1,idx_cb,working_set.shape[0]];
-    for i in range(len(idx_Xk)-1):
+
+    #TODO: I am confident below here.
+
+    for i in range((idx_Xk[0].shape)-1):
         for j in range (idx_Xk[i],idx_Xk[i+1]):
             kij=(Lk[i+1,2]-Lk[i,2])/(x(idx_Xk[i+1])-x(idx_Xk[i])) #$compute the slope K
             L[j]=Lk[i,2]+kij*(x[j]-x(idx_Xk[i]))
 
 
-    #TODO: I am confident below here.
 
     H= [i for i in working_set if i not in L]
     return L,H
