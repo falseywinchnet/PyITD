@@ -387,12 +387,7 @@ def itd_baseline_extract(x: list[numpy.float64]) -> (list[numpy.float64], list[n
     #%% compute the Lt curve
 
     idx_Xk=[1,idx_cb,len(x)];
-    #L=zeros(1,length(x));
-    #for i=1:length(idx_Xk)-1
-    #for j=idx_Xk(i):idx_Xk(i+1)
-    #    kij=(Lk(i+1,2)-Lk(i,2))/(x(idx_Xk(i+1))-x(idx_Xk(i))); %compute the slope K
-    #    L(j)=Lk(i,2)+kij*(x(j)-x(idx_Xk(i)));
-    #end
+
 
     #TODO: I am confident below here.
 
