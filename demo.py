@@ -45,7 +45,7 @@ from __future__ import division,print_function
 import numpy
 import numpy as np
 import pyaudio
-import numba
+#import numba
 from matplotlib import mlab
 from np_rw_buffer import AudioFramingBuffer
 from np_rw_buffer import RingBuffer
@@ -55,13 +55,13 @@ import time
 import array
 from time import sleep
 import dearpygui.dearpygui as dpg
-import snowy
+#import snowy
 import matplotlib.cm as cm
 from scipy.interpolate import interp1d
 
 
 
-@numba.jit(numba.float64[:](numba.float64[:], numba.int32, numba.float64[:]), nopython=True, parallel=True, nogil=True, cache=True)
+#@numba.jit(numba.float64[:](numba.float64[:], numba.int32, numba.float64[:]), nopython=True, parallel=True, nogil=True, cache=True)
 def shift1d(arr : list[numpy.float64], num: int, fill_value: list[numpy.float64]) -> list[numpy.float64] :
     result = numpy.empty_like(arr)
     if num > 0:
@@ -74,7 +74,7 @@ def shift1d(arr : list[numpy.float64], num: int, fill_value: list[numpy.float64]
         result[:] = arr
     return result
 
-@numba.jit(numba.float64[:,:](numba.float64[:,:], numba.int32, numba.float64[:,:]), nopython=True, parallel=True, nogil=True,cache=True)
+#@numba.jit(numba.float64[:,:](numba.float64[:,:], numba.int32, numba.float64[:,:]), nopython=True, parallel=True, nogil=True,cache=True)
 def shift2dy(arr: list[numpy.float64], num: int, fill_value: list[numpy.float64]) -> list[numpy.float64] :
     result = numpy.empty_like(arr)
     if num > 0:
@@ -87,7 +87,7 @@ def shift2dy(arr: list[numpy.float64], num: int, fill_value: list[numpy.float64]
         result[::] = arr
     return result
 
-@numba.jit(numba.float64[:,:,:](numba.float64[:,:,:], numba.int32, numba.float64[:,:,:]), nopython=True, parallel=True, nogil=True,cache=True)
+#@numba.jit(numba.float64[:,:,:](numba.float64[:,:,:], numba.int32, numba.float64[:,:,:]), nopython=True, parallel=True, nogil=True,cache=True)
 def shift3dx(arr: list[numpy.float64], num: int, fill_value: list[numpy.float64]) -> list[numpy.float64] :
     result = numpy.empty_like(arr)
     if num > 0:
@@ -100,7 +100,7 @@ def shift3dx(arr: list[numpy.float64], num: int, fill_value: list[numpy.float64]
         result[:] = arr
     return result
 
-@numba.jit(numba.float32[:,:,:](numba.float32[:,:,:], numba.int32, numba.float32[:,:,:]), nopython=True, parallel=True, nogil=True,cache=True)
+#@numba.jit(numba.float32[:,:,:](numba.float32[:,:,:], numba.int32, numba.float32[:,:,:]), nopython=True, parallel=True, nogil=True,cache=True)
 def shift3dximg(arr: list[numpy.float32], num: int, fill_value: list[numpy.float32]) -> list[numpy.float32] :
     result = numpy.empty_like(arr)
     if num > 0:
@@ -279,7 +279,7 @@ def ITD(data: list[numpy.float64]) -> ( list[numpy.float64]):
 
     H = []
     L1 = []
-    H1 = numpy.empty
+    H1 = numpy.empty_like(data)
     xx = working_set.transpose()
     E_x = numpy.square(working_set) # same thing as E_x=sum(x.^2);
     counter = 0
@@ -293,9 +293,6 @@ def ITD(data: list[numpy.float64]) -> ( list[numpy.float64]):
             H = numpy.vstack(H, L1)
             break
         xx[:] = L1[:]
-
-    with numba.objmode(start=numba.float64):
-       start = time.time()
 
     return xx
 
@@ -324,24 +321,28 @@ def stop_iter(xx,counter,N_max,E_x) -> (bool):
 #% 2018-11-04"""
 
 
-def itd_baseline_extract(x: list[numpy.float64]) -> (list[numpy.float64], list[numpy.float64]):
+def itd_baseline_extract(data: list[numpy.float64]) -> (list[numpy.float64], list[numpy.float64]):
 
 
 
 
-    working_set = numpy.zeros_like(x)
-    working_set[:] = numpy.transpose(x) #x=x(:)';
-    t = range(working_set[0].shape) # t=1:length(x); should do the same as this
+    working_set = numpy.zeros_like(data)
+    working_set[:] = numpy.transpose(data[:]) #x=x(:)';
+    t = list(range(data.size)) # t=1:length(x); should do the same as this
+    x = numpy.zeros_like(data)
+    x[:] = working_set[:]
 
 
     alpha=0.5
-    val_max, idx_max= detect_peaks(x)
-    val_min, idx_min= detect_peaks(-x)
-    idx_cb= set.union(idx_max,idx_min)
+    idx_max = detect_peaks(x)
+    val_max = x[idx_max] #get peaks based on indexes
+    idx_min= detect_peaks(-x)
+    val_min = x[idx_min]
+    idx_cb= numpy.union1d(idx_max,idx_min)
     val_min= -val_min
     if (min(idx_max)<min(idx_min)):
-        idx_min = numpy.append(idx_max[0,:],idx_min[:])
-        val_min = numpy.append(val_min[0,:],val_min[:])
+        idx_min = numpy.append(idx_max[0],idx_min[:])
+        val_min = numpy.append(val_min[0],val_min[:])
 
     elif ( min(idx_max)> min(idx_min)):
         idx_max=numpy.append(idx_min[0],idx_max[:])
@@ -362,10 +363,11 @@ def itd_baseline_extract(x: list[numpy.float64]) -> (list[numpy.float64], list[n
    # "interp1(x,v,xq) returns interpolated values of a 1-D function at specific query points using linear interpolation.
     # Vector x contains the sample points, and v contains the corresponding values, v(x).
     # Vector xq contains the coordinates of the query points."
+    print(idx_max, val_max, t, idx_max.shape, val_max.shape, len(t))
     Max_line=interp1d(idx_max,val_max,kind='linear')(t)
     Min_line=interp1d(idx_min,val_min,kind='linear')(t)
-    Lk1=alpha*Max_line(idx_min)+val_min*(1-alpha)
-    Lk2=alpha*Min_line(idx_max)+val_max*(1-alpha)
+    Lk1=alpha*Max_line[idx_min]+val_min*(1-alpha)
+    Lk2=alpha*Min_line[idx_max]+val_max*(1-alpha)
 
 
     Lk1=  numpy.vstack(idx_min, Lk1)  #Lk1=[idx_min(:),Lk1(:)];
@@ -382,7 +384,6 @@ def itd_baseline_extract(x: list[numpy.float64]) -> (list[numpy.float64], list[n
 
     Lk=Lk_sorted[1:-1,:]
 
-
     Lk=numpy.asarray([0,Lk[0,1]],Lk,[x[0].shape,Lk[-1,1]])#Lk=[[1,Lk(1,2)];Lk;[length(x),Lk(end,2)]];
 
 
@@ -397,8 +398,8 @@ def itd_baseline_extract(x: list[numpy.float64]) -> (list[numpy.float64], list[n
 
 
 
-
-    H= [i for i in working_set if i not in L]
+    H[:] = [i for i in working_set if i not in L]
+    print(L,H)
     return L,H
 
 
@@ -444,7 +445,7 @@ class FilterRun(Thread):
         # https://stackoverflow.com/questions/39359693/single-valued-array-to-rgba-array-using-custom-color-map-in-python
         arr_color = self.SM.to_rgba(Z, bytes=False, norm=True)
         arr_color = arr_color[:30, :, :]  # we just want the last bits where the specgram data lies.
-        arr_color = snowy.resize(arr_color, width=60, height=100)  # in the future, this width will be 60.
+        #arr_color = snowy.resize(arr_color, width=60, height=100)  # in the future, this width will be 60.
         arr_color = numpy.rot90(arr_color)  # rotate it and jam it in the buffer lengthwise
         self.cleanspecbuf.growing_write(arr_color)
         return
