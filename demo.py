@@ -325,12 +325,9 @@ def itd_baseline_extract(data: list[numpy.float64]) -> (list[numpy.float64], lis
 
 
 
-
-    working_set = numpy.zeros_like(data)
-    working_set[:] = numpy.transpose(data[:]) #x=x(:)';
-    t = list(range(data.size)) # t=1:length(x); should do the same as this
-    x = numpy.zeros_like(data)
-    x[:] = working_set[:]
+    x = numpy.transpose(data[:]) #x=x(:)';
+    t = list(range(x.size))
+    # t=1:length(x); should do the same as this
 
 
     alpha=0.5
@@ -398,7 +395,7 @@ def itd_baseline_extract(data: list[numpy.float64]) -> (list[numpy.float64], lis
 
 
 
-    H[:] = [i for i in working_set if i not in L]
+    H[:] = [i for i in x if i not in L]
     print(L,H)
     return L,H
 
