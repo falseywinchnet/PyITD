@@ -257,7 +257,7 @@ def _plot(x, mph, mpd, threshold, edge, valley, ax, ind):
 
 
 #@numba.jit(numba.float64[:](numba.float64[:]), nopython=True, parallel=True, nogil=True,cache=True)
-def ITD(data: list[numpy.float64]) -> ( list[numpy.float64]):
+def ITD(data: list[int]):
     # notes:
     # The pythonic way to COPY an array is to do x[:] = y[:]
     # do x=y and it wont copy it, so any changes made to X will also be made to Y.
@@ -276,9 +276,9 @@ def ITD(data: list[numpy.float64]) -> ( list[numpy.float64]):
     N_max = 10;
     working_set = numpy.zeros_like(data)
     working_set[:] = data[:]
-
-    H = []
-    L1 = []
+    max_length= len(working_set)
+    H = numpy.ndarray(shape=(0,len(working_set)), dtype=int)
+    L1 = numpy.empty_like(data)
     H1 = numpy.empty_like(data)
     xx = working_set.transpose()
     E_x = numpy.square(working_set) # same thing as E_x=sum(x.^2);
@@ -286,15 +286,21 @@ def ITD(data: list[numpy.float64]) -> ( list[numpy.float64]):
     STOP = False
     while 1:
         counter = counter + 1
-        L1, H1 = itd_baseline_extract(xx)
-        H = numpy.vstack(H, H1)
+        Lx, Hx = itd_baseline_extract(xx)
+        L1=numpy.array(Lx)
+        L1.resize(max_length)
+        H1 =numpy.array(Hx)
+        H1.resize(max_length)
+        H = numpy.vstack((H, H1))
+        print(counter,H.shape)
+
         STOP = stop_iter(xx, counter, N_max, E_x)
         if STOP:
-            H = numpy.vstack(H, L1)
+            H = numpy.vstack((H, L1))
             break
         xx[:] = L1[:]
-
-    return xx
+    print("finished")
+    return H
 
 
 
@@ -302,15 +308,17 @@ def stop_iter(xx,counter,N_max,E_x) -> (bool):
     if (counter>N_max):
         return True
 
-    Exx=numpy.square(xx)
-    if (Exx<=0.01 * E_x):
-        return True
+    #Exx=numpy.square(xx)
+    #print(Exx.shape)
+    #print(E_x.shape)
+   # if (Exx<=0.01 * E_x.any()):
+    #    return True
     #https://blog.ytotech.com/2015/11/01/findpeaks-in-python/ we may want to switch
     #to the PeakUtils interpolate function for better results
     #however, since there is no filtering going on here, we will use Marcos Duarte's code
     pks1= detect_peaks(xx)
     pks2= detect_peaks(-xx)
-    pks= set.union(pks1, pks2)
+    pks= numpy.union1d(pks1, pks2)
     if (len(pks)<=7):
         return True
     return False
@@ -321,11 +329,11 @@ def stop_iter(xx,counter,N_max,E_x) -> (bool):
 #% 2018-11-04"""
 
 
-def itd_baseline_extract(data: list[numpy.float64]) -> (list[numpy.float64], list[numpy.float64]):
+def itd_baseline_extract(data: list[int]) -> (list[int], list[int]):
 
-
-
-    x = numpy.transpose(data[:]) #x=x(:)';
+   #dt = np.dtype([('value', np.float64, 16), ('index', np.int, (2,))])
+    x = numpy.zeros_like(data)#   (data.shape, dtype=dt)
+    x[:] = numpy.transpose(data[:]) #x=x(:)';
     t = list(range(x.size))
     # t=1:length(x); should do the same as this
 
@@ -335,74 +343,71 @@ def itd_baseline_extract(data: list[numpy.float64]) -> (list[numpy.float64], lis
     val_max = x[idx_max] #get peaks based on indexes
     idx_min= detect_peaks(-x)
     val_min = x[idx_min]
-    idx_cb= numpy.union1d(idx_max,idx_min)
     val_min= -val_min
-    if (min(idx_max)<min(idx_min)):
-        idx_min = numpy.append(idx_max[0],idx_min[:])
-        val_min = numpy.append(val_min[0],val_min[:])
 
-    elif ( min(idx_max)> min(idx_min)):
-        idx_max=numpy.append(idx_min[0],idx_max[:])
-        val_max=numpy.append(val_max[0],val_max[:])
+    num_extrema = len(val_max) + len(val_min)# numpy.union1d(idx_max,idx_min)
+    extrema_indices = np.zeros((num_extrema + 2), dtype=int)
+    extrema_indices[1:-1] = np.union1d(idx_max, idx_min)
+    extrema_indices[-1] = len(x) - 1
 
-    if (max(idx_max)>max(idx_min)):
-        idx_min=numpy.append(idx_min[:],idx_max[-1])
-        val_min=numpy.append(val_min[:], val_min[-1])
-    elif (max(idx_max)< max(idx_min)):
-        idx_max=numpy.append(idx_max[:],idx_min[-1])
-        val_max=numpy.append(val_max[:], val_max[-1])
+    baseline_knots = np.zeros(len(extrema_indices))
+    baseline_knots[0] = np.mean(x[:2])
+    baseline_knots[-1] = np.mean(x[-2:])
 
 
-    H = numpy.zeros_like(x)
-    L = numpy.zeros_like(x)
+    #H = numpy.zeros_like(x)
 
     #https://localcoder.org/why-does-matlab-interp1-produce-different-results-than-numpy-interp
    # "interp1(x,v,xq) returns interpolated values of a 1-D function at specific query points using linear interpolation.
     # Vector x contains the sample points, and v contains the corresponding values, v(x).
     # Vector xq contains the coordinates of the query points."
-    print(idx_max, val_max, t, idx_max.shape, val_max.shape, len(t))
-    Max_line=interp1d(idx_max,val_max,kind='linear')(t)
-    Min_line=interp1d(idx_min,val_min,kind='linear')(t)
-    Lk1=alpha*Max_line[idx_min]+val_min*(1-alpha)
-    Lk2=alpha*Min_line[idx_max]+val_max*(1-alpha)
+
+    num_extrema = len(val_max) + len(val_min)
+
+    # plt.plot(x[extrema_indices], np.linspace(0, 10, len(extrema_indices)), 'C2.-', lw=0.3, ms=1)
+    # plt.xlim(0, 0.2)
+
+    baseline_knots = np.zeros(len(extrema_indices))
+    baseline_knots[0] = np.mean(x[:2])
+    baseline_knots[-1] = np.mean(x[-2:])
+
+    L = np.zeros_like(x)
 
 
-    Lk1=  numpy.vstack(idx_min, Lk1)  #Lk1=[idx_min(:),Lk1(:)];
-    #this line means create a matrix(an array in 2d) and stack each element in it's own row
-    Lk2=numpy.vstack(idx_max,Lk2)
-    Lk=numpy.vstack(Lk1,Lk2)
-    #https://www.mathworks.com/matlabcentral/answers/73735-what-does-it-mean-by-writing-idx-in-code
-    #~ means discard the first output of the sort function
-    #which means it only wants the index
-    Lk_col_2 = numpy.argsort(Lk, axis= 0) # sort by first axis?
+    for k in range(1, len(extrema_indices) - 1):
+        baseline_knots[k] = 0.5 * (x[extrema_indices[k - 1]] + \
+        (extrema_indices[k] - extrema_indices[k - 1]) / (extrema_indices[k + 1] - extrema_indices[k - 1]) * \
+        (x[extrema_indices[k + 1]] - x[extrema_indices[k - 1]])) + \
+                            0.5 * x[extrema_indices[k]]
 
-    Lk_sorted= Lk[Lk_col_2,:] #Lk_sorted=Lk(Lk_col_2,:);
+    interpolator = interp1d(extrema_indices, baseline_knots / x[extrema_indices], kind='linear')(t)
 
+    Lk1=alpha*interpolator[idx_min]+val_min*(1-alpha)
+    Lk2=alpha*interpolator[idx_max]+val_max*(1-alpha)
+   # Lk1=  numpy.concatenate((idx_min, Lk1))  #Lk1=[idx_min(:),Lk1(:)];
+  #  Lk2= numpy.concatenate((idx_max,Lk2))
 
-    Lk=Lk_sorted[1:-1,:]
+    Lk = np.zeros((num_extrema + 2), dtype=int)
+    Lk[1:-1] = numpy.concatenate((Lk1,Lk2))
+    Lk[-1] = len(x) - 1
 
-    Lk=numpy.asarray([0,Lk[0,1]],Lk,[x[0].shape,Lk[-1,1]])#Lk=[[1,Lk(1,2)];Lk;[length(x),Lk(end,2)]];
+   # Lk=numpy.concatenate((Lk1,Lk2))
+    #Lk_col_2 = numpy.argsort(Lk, axis= 0) # sort by first axis?
+    #Lk_sorted= Lk[Lk_col_2,:] #Lk_sorted=Lk(Lk_col_2,:);
+    #Lk=Lk_sorted[1:-1,:]
 
+    for k in range(len(extrema_indices) - 1):
+        for j in range(extrema_indices[k], extrema_indices[k + 1]):
+            kij = (Lk[k + 1] - Lk[k]) / (x[extrema_indices[k + 1]] - x[extrema_indices[k]])  # $compute the slope K
+            L[j] = Lk[k] + kij * (x[j] - x[extrema_indices[k]])
 
-    #%% compute the Lt curve
-
-    idx_Xk=numpy.asarray([1,idx_cb,x[0].shape]) #idx_Xk=[1,idx_cb,length(x)];
-
-    for i in range((idx_Xk[0].shape)-1):
-        for j in range (idx_Xk[i],idx_Xk[i+1]):
-            kij=(Lk[i+1,1]-Lk[i,1])/(x(idx_Xk[i+1])-x(idx_Xk[i])) #$compute the slope K
-            L[j]=Lk[i,1]+kij*(x[j]-x(idx_Xk[i]))
-
-
-
-    H[:] = [i for i in x if i not in L]
-    print(L,H)
+    H = [i for i in x if i not in L]
     return L,H
 
 
 
 class FilterRun(Thread):
-    def __init__(self, rb, pb, channels, processing_size, dtype,work,time,floor,iterations,clean,run):
+    def __init__(self, rb, pb, channels, processing_size, dtype,work,time,floor,iterations,clean,run,f):
         super(FilterRun, self).__init__()
         self.running = True
         self.rb = rb
@@ -424,6 +429,7 @@ class FilterRun(Thread):
         self.noverlap=446
         self.SM = cm.ScalarMappable(cmap="turbo")
         self.last = [0.,0.]
+        self.f = f
 
 
 
@@ -444,7 +450,14 @@ class FilterRun(Thread):
         arr_color = arr_color[:30, :, :]  # we just want the last bits where the specgram data lies.
         #arr_color = snowy.resize(arr_color, width=60, height=100)  # in the future, this width will be 60.
         arr_color = numpy.rot90(arr_color)  # rotate it and jam it in the buffer lengthwise
-        self.cleanspecbuf.growing_write(arr_color)
+        #self.cleanspecbuf.growing_write(arr_color)
+        results = ITD(self.buffer2[:, 0])
+        np.set_printoptions(threshold=np.inf, linewidth=200)
+
+        print(results)
+        print(results.shape)
+        numpy.savetxt("ITD.txt", results, fmt='%.18e', delimiter=' ', newline='\n', header='', footer='', comments='# ', encoding=None)
+
         return
 
         #for i in range(self.channels):
@@ -459,6 +472,8 @@ class FilterRun(Thread):
 
 
     def run(self):
+
+
         while self.running:
             if len(self.rb) < self.processing_size * 2:
                 sleep(0.05)  # idk how long we should sleep
@@ -496,8 +511,8 @@ class StreamSampler(object):
             pass
         return cls.dtype_to_paformat[dtype.name]
 
-    def __init__(self, sample_rate=44100, channels=2, buffer_delay=1.5,  # or 1.5, measured in seconds
-                 micindex=1, speakerindex=1, dtype=numpy.float32):
+    def __init__(self, sample_rate=1024, channels=2, buffer_delay=1.5,  # or 1.5, measured in seconds
+                 micindex=1, speakerindex=1, dtype=numpy.int32):
         self.pa = pyaudio.PyAudio()
         self._processing_size = sample_rate
         # np_rw_buffer (AudioFramingBuffer offers a delay time)
@@ -525,13 +540,15 @@ class StreamSampler(object):
         self.floor = 8192#unknown, seems to do better with higher values
         self.iterations = 0
         self.enabled = False
-        self.filterthread = FilterRun(self.rb, self.processedrb, self._channels, self._processing_size, self.dtype,self.work,self.time, self.floor,self.iterations,self.cleanspectrogrambuffer,self.enabled)
+        self.f = open('test.txt', 'w')
+        self.filterthread = FilterRun(self.rb, self.processedrb, self._channels, self._processing_size, self.dtype,self.work,self.time, self.floor,self.iterations,self.cleanspectrogrambuffer,self.enabled,self.f)
         self.micindex = micindex
         self.speakerindex = speakerindex
         self.micstream = None
         self.speakerstream = None
         self.speakerdevice = ""
         self.micdevice = ""
+
 
 
         # Set inputs for inheritance
