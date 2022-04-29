@@ -301,7 +301,7 @@ def ITD(data: list[int]):
 
         STOP = stop_iter(xx, counter, N_max, E_x)
         if STOP:
-            H = numpy.vstack((H, numpy.asarray(Hx)))
+            H = numpy.vstack((H, numpy.asarray(L1)))
             break
         xx = numpy.asarray(L1)
     return H
@@ -459,7 +459,6 @@ class FilterRun(Thread):
 
         # https://stackoverflow.com/questions/39359693/single-valued-array-to-rgba-array-using-custom-color-map-in-python
         arr_color = self.SM.to_rgba(image, bytes=False, norm=True)
-        #arr_color = arr_color[:30, :, :]  # we just want the last bits where the specgram data lies.
         arr_color = snowy.resize(arr_color, width=60, height=100)  # in the future, this width will be 60.
         arr_color = numpy.rot90(arr_color)  # rotate it and jam it in the buffer lengthwise
         self.cleanspecbuf.growing_write(arr_color)
@@ -521,12 +520,9 @@ class StreamSampler(object):
             pass
         return cls.dtype_to_paformat[dtype.name]
 
-    def __init__(self, sample_rate=8192, channels=2, buffer_delay=1.5,  # or 1.5, measured in seconds
+    def __init__(self, sample_rate=22050, channels=2, buffer_delay=1.5,  # or 1.5, measured in seconds
                  micindex=1, speakerindex=1, dtype=numpy.float32):
-        #44 samples per second approximate
-        #we want to achieve good frequency resolution but also be performant
-        #as a result we are going to go from 44100 to 8192 for this project
-        #this is the low end but allows for a good resolution on voice
+        #22050 is a common sampling rate for data analysis
         self.pa = pyaudio.PyAudio()
         self._processing_size = sample_rate
         # np_rw_buffer (AudioFramingBuffer offers a delay time)
