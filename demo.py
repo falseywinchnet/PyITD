@@ -37,7 +37,7 @@ step three Start the python program
 https://vb-audio.com/Cable/ is an example of a free audio cable.
 The program expects 44100hz audio, 16 bit, two channel, but can be configured to work with anything
 Additional thanks to Justin Engel.
-
+ITD implementation knot and trend fixing code by Chromum
 """
 
 from __future__ import division,print_function
@@ -55,13 +55,15 @@ import time
 import array
 from time import sleep
 import dearpygui.dearpygui as dpg
-#import snowy
+import snowy
 import matplotlib.cm as cm
 from scipy.interpolate import interp1d
+import awkward as ak
+import numba
 
 
 
-#@numba.jit(numba.float64[:](numba.float64[:], numba.int32, numba.float64[:]), nopython=True, parallel=True, nogil=True, cache=True)
+@numba.jit(numba.float64[:](numba.float64[:], numba.int32, numba.float64[:]), nopython=True, parallel=True, nogil=True, cache=True)
 def shift1d(arr : list[numpy.float64], num: int, fill_value: list[numpy.float64]) -> list[numpy.float64] :
     result = numpy.empty_like(arr)
     if num > 0:
@@ -74,7 +76,7 @@ def shift1d(arr : list[numpy.float64], num: int, fill_value: list[numpy.float64]
         result[:] = arr
     return result
 
-#@numba.jit(numba.float64[:,:](numba.float64[:,:], numba.int32, numba.float64[:,:]), nopython=True, parallel=True, nogil=True,cache=True)
+@numba.jit(numba.float64[:,:](numba.float64[:,:], numba.int32, numba.float64[:,:]), nopython=True, parallel=True, nogil=True,cache=True)
 def shift2dy(arr: list[numpy.float64], num: int, fill_value: list[numpy.float64]) -> list[numpy.float64] :
     result = numpy.empty_like(arr)
     if num > 0:
@@ -87,7 +89,7 @@ def shift2dy(arr: list[numpy.float64], num: int, fill_value: list[numpy.float64]
         result[::] = arr
     return result
 
-#@numba.jit(numba.float64[:,:,:](numba.float64[:,:,:], numba.int32, numba.float64[:,:,:]), nopython=True, parallel=True, nogil=True,cache=True)
+@numba.jit(numba.float64[:,:,:](numba.float64[:,:,:], numba.int32, numba.float64[:,:,:]), nopython=True, parallel=True, nogil=True,cache=True)
 def shift3dx(arr: list[numpy.float64], num: int, fill_value: list[numpy.float64]) -> list[numpy.float64] :
     result = numpy.empty_like(arr)
     if num > 0:
@@ -100,7 +102,7 @@ def shift3dx(arr: list[numpy.float64], num: int, fill_value: list[numpy.float64]
         result[:] = arr
     return result
 
-#@numba.jit(numba.float32[:,:,:](numba.float32[:,:,:], numba.int32, numba.float32[:,:,:]), nopython=True, parallel=True, nogil=True,cache=True)
+@numba.jit(numba.float32[:,:,:](numba.float32[:,:,:], numba.int32, numba.float32[:,:,:]), nopython=True, parallel=True, nogil=True,cache=True)
 def shift3dximg(arr: list[numpy.float32], num: int, fill_value: list[numpy.float32]) -> list[numpy.float32] :
     result = numpy.empty_like(arr)
     if num > 0:
@@ -114,7 +116,6 @@ def shift3dximg(arr: list[numpy.float32], num: int, fill_value: list[numpy.float
     return result
 #because numpy's zeroth array is the Y axis, we have to do this in the 1st dimension to shift the X axis
 #if the arrays are not the same size, don't attempt to use coordinates for fill value- it will fail.
-
 
 
 def detect_peaks(x, mph=None, mpd=1, threshold=0, edge='rising',
@@ -223,7 +224,6 @@ def detect_peaks(x, mph=None, mpd=1, threshold=0, edge='rising',
 
     return ind
 
-
 def _plot(x, mph, mpd, threshold, edge, valley, ax, ind):
     """Plot results of the detect_peaks function, see its help."""
     try:
@@ -270,49 +270,53 @@ def ITD(data: list[int]):
     # this implementation of FABADA is not optimized for 2d arrays, however, it is easily swapped by changing the means
     # estimation and by simply changing all other code to iterate over 2d instead of 1d
     # care must be taken with numba parallelization/vectorization
-
     #we will now implement the intrinsic time-scale decomposition algorithm.
     #function H=itd(x)
-    N_max = 10;
+    N_max = 10
     working_set = numpy.zeros_like(data)
     working_set[:] = data[:]
-    max_length= len(working_set)
-    H = numpy.ndarray(shape=(0,len(working_set)), dtype=int)
-    L1 = numpy.empty_like(data)
-    H1 = numpy.empty_like(data)
     xx = working_set.transpose()
-    E_x = numpy.square(working_set) # same thing as E_x=sum(x.^2);
+    E_x = sum(numpy.square(working_set)) # same thing as E_x=sum(x.^2);
     counter = 0
     STOP = False
+    #we have to initialize the array, because awkward doesn't have an empty array initializer-
+    #and because we do not know the first value! of the array
+    counter = counter + 1
+    Lx, Hx = itd_baseline_extract(xx)
+    L1 = numpy.asarray(Lx)
+    H = numpy.asarray(Hx)
+
+    STOP = stop_iter(xx, counter, N_max, E_x)
+    if STOP:
+        print("finished in one iteration")
+        return H
+
+    xx = numpy.asarray(L1)
+
     while 1:
         counter = counter + 1
         Lx, Hx = itd_baseline_extract(xx)
-        L1=numpy.array(Lx)
-        L1.resize(max_length)
-        H1 =numpy.array(Hx)
-        H1.resize(max_length)
-        H = numpy.vstack((H, H1))
-        print(counter,H.shape)
+        L1= numpy.asarray(Lx)
+        H = numpy.vstack((H,numpy.asarray(Hx)))
 
         STOP = stop_iter(xx, counter, N_max, E_x)
         if STOP:
-            H = numpy.vstack((H, L1))
+            H = numpy.vstack((H, numpy.asarray(Hx)))
             break
-        xx[:] = L1[:]
-    print("finished")
+        xx = numpy.asarray(L1)
     return H
-
 
 
 def stop_iter(xx,counter,N_max,E_x) -> (bool):
     if (counter>N_max):
         return True
+    Exx= sum(numpy.square(xx))
+    exr = 0.01 * E_x
+    trutharray = numpy.less_equal(Exx,exr)
 
-    #Exx=numpy.square(xx)
-    #print(Exx.shape)
-    #print(E_x.shape)
-   # if (Exx<=0.01 * E_x.any()):
-    #    return True
+    if numpy.any(trutharray):
+        print("value exceeded truth")
+        return True
     #https://blog.ytotech.com/2015/11/01/findpeaks-in-python/ we may want to switch
     #to the PeakUtils interpolate function for better results
     #however, since there is no filtering going on here, we will use Marcos Duarte's code
@@ -320,7 +324,9 @@ def stop_iter(xx,counter,N_max,E_x) -> (bool):
     pks2= detect_peaks(-xx)
     pks= numpy.union1d(pks1, pks2)
     if (len(pks)<=7):
+        print("len was less than 8")
         return True
+
     return False
 
 #"""% Matlab Written by Linshan Jia (jialinshan123@126.com)
@@ -375,15 +381,15 @@ def itd_baseline_extract(data: list[int]) -> (list[int], list[int]):
 
 
     for k in range(1, len(extrema_indices) - 1):
-        baseline_knots[k] = 0.5 * (x[extrema_indices[k - 1]] + \
+        baseline_knots[k] = alpha * (x[extrema_indices[k - 1]] + \
         (extrema_indices[k] - extrema_indices[k - 1]) / (extrema_indices[k + 1] - extrema_indices[k - 1]) * \
         (x[extrema_indices[k + 1]] - x[extrema_indices[k - 1]])) + \
-                            0.5 * x[extrema_indices[k]]
+                            alpha * x[extrema_indices[k]]
 
     interpolator = interp1d(extrema_indices, baseline_knots / x[extrema_indices], kind='linear')(t)
 
-    Lk1=alpha*interpolator[idx_min]+val_min*(1-alpha)
-    Lk2=alpha*interpolator[idx_max]+val_max*(1-alpha)
+    Lk1=interpolator[idx_min]+val_min*(1-alpha)
+    Lk2=interpolator[idx_max]+val_max*(1-alpha)
    # Lk1=  numpy.concatenate((idx_min, Lk1))  #Lk1=[idx_min(:),Lk1(:)];
   #  Lk2= numpy.concatenate((idx_max,Lk2))
 
@@ -401,7 +407,8 @@ def itd_baseline_extract(data: list[int]) -> (list[int], list[int]):
             kij = (Lk[k + 1] - Lk[k]) / (x[extrema_indices[k + 1]] - x[extrema_indices[k]])  # $compute the slope K
             L[j] = Lk[k] + kij * (x[j] - x[extrema_indices[k]])
 
-    H = [i for i in x if i not in L]
+    H = numpy.subtract(x, L)
+
     return L,H
 
 
@@ -415,8 +422,8 @@ class FilterRun(Thread):
         self.channels = channels
         self.processing_size = processing_size
         self.dtype = dtype
-        self.buffer = numpy.ndarray(dtype=numpy.float64, shape=[int(self.processing_size * self.channels)])
-        self.buffer2 = numpy.ndarray(dtype=numpy.float64, shape=[int(self.processing_size * self.channels)])
+        self.buffer = numpy.ndarray(dtype=numpy.float32, shape=[int(self.processing_size * self.channels)])
+        self.buffer2 = numpy.ndarray(dtype=numpy.float32, shape=[int(self.processing_size * self.channels)])
         self.buffer2 = self.buffer.reshape(-1, self.channels)
         self.buffer = self.buffer.reshape(-1, self.channels)
         self.work = work
@@ -437,26 +444,29 @@ class FilterRun(Thread):
 
     def write_filtered_data(self):
 
-        numpy.copyto(self.buffer, self.rb.read(self.processing_size).astype(dtype=numpy.float64))
-        #self.buffer contains (44100,2) of numpy.float32 audio values sampled with pyaudio
+        numpy.copyto(self.buffer, self.rb.read(self.processing_size).astype(dtype=numpy.float32))
         iterationz = 0
+        results = ITD(self.buffer[:, 0])
+        results = numpy.squeeze(numpy.asarray(results))
+        numpy.flip(results)
+        #zed = (results.shape[1] * results.shape[0])
 
-        self.processedrb.write(self.buffer.astype(dtype=self.dtype), error=True)
-        Z, freqs, t = mlab.specgram(self.buffer2[:, 0], NFFT=256, Fs=44100, detrend=None, window=None, noverlap=223,
-                                        pad_to=None, scale_by_freq=None, mode="default")
+        #self.processedrb.write(self.buffer.astype(dtype=self.dtype), error=True) #UNCOMMENT ALSO PLAY
+        #Z, freqs, t = mlab.specgram(numpy.ravel(results, order='C'), NFFT=256, Fs=zed, detrend=None, window=None, noverlap=223,
+         #                               pad_to=None, scale_by_freq=None, mode="default")
+        c = (255*(results - np.min(results))/np.ptp(results)).astype(int)
+        image = c.astype('float64')
 
         # https://stackoverflow.com/questions/39359693/single-valued-array-to-rgba-array-using-custom-color-map-in-python
-        arr_color = self.SM.to_rgba(Z, bytes=False, norm=True)
-        arr_color = arr_color[:30, :, :]  # we just want the last bits where the specgram data lies.
-        #arr_color = snowy.resize(arr_color, width=60, height=100)  # in the future, this width will be 60.
+        arr_color = self.SM.to_rgba(image, bytes=False, norm=True)
+        #arr_color = arr_color[:30, :, :]  # we just want the last bits where the specgram data lies.
+        arr_color = snowy.resize(arr_color, width=60, height=100)  # in the future, this width will be 60.
         arr_color = numpy.rot90(arr_color)  # rotate it and jam it in the buffer lengthwise
-        #self.cleanspecbuf.growing_write(arr_color)
-        results = ITD(self.buffer2[:, 0])
-        np.set_printoptions(threshold=np.inf, linewidth=200)
+        self.cleanspecbuf.growing_write(arr_color)
+        #np.set_printoptions(threshold=np.inf, linewidth=200)
+        #zed = ak.to_numpy(results)
+        #zed = numpy.squeeze(zed)
 
-        print(results)
-        print(results.shape)
-        numpy.savetxt("ITD.txt", results, fmt='%.18e', delimiter=' ', newline='\n', header='', footer='', comments='# ', encoding=None)
 
         return
 
@@ -511,8 +521,12 @@ class StreamSampler(object):
             pass
         return cls.dtype_to_paformat[dtype.name]
 
-    def __init__(self, sample_rate=1024, channels=2, buffer_delay=1.5,  # or 1.5, measured in seconds
-                 micindex=1, speakerindex=1, dtype=numpy.int32):
+    def __init__(self, sample_rate=8192, channels=2, buffer_delay=1.5,  # or 1.5, measured in seconds
+                 micindex=1, speakerindex=1, dtype=numpy.float32):
+        #44 samples per second approximate
+        #we want to achieve good frequency resolution but also be performant
+        #as a result we are going to go from 44100 to 8192 for this project
+        #this is the low end but allows for a good resolution on voice
         self.pa = pyaudio.PyAudio()
         self._processing_size = sample_rate
         # np_rw_buffer (AudioFramingBuffer offers a delay time)
@@ -748,12 +762,12 @@ changes.
         # filtered = self.rb.read(frame_count)
         # if len(filtered) < frame_count:
         #     filtered = numpy.zeros((frame_count, self.channels), dtype=self.dtype)
-        if len(self.processedrb) < self.processing_size:
+        if True: # len(self.processedrb) < self.processing_size:
             # print('Not enough data to play! Increase the buffer_delay')
             # uncomment this for debug
             audio = numpy.zeros((self.processing_size, self.channels), dtype=self.dtype)
             return audio, pyaudio.paContinue
-
+        #SKIP ALL THE CODE BELOW HERE IN DEBUG
         audio = self.processedrb.read(self.processing_size)
         chans = []
         for i in range(self.channels):
