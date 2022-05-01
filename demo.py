@@ -58,9 +58,9 @@ import dearpygui.dearpygui as dpg
 import snowy
 import matplotlib.cm as cm
 from scipy.interpolate import interp1d
+import scipy
 import awkward as ak
 import numba
-
 
 
 
@@ -119,6 +119,57 @@ def shift3dximg(arr: list[numpy.float32], num: int, fill_value: list[numpy.float
     return result
 #because numpy's zeroth array is the Y axis, we have to do this in the 1st dimension to shift the X axis
 #if the arrays are not the same size, don't attempt to use coordinates for fill value- it will fail.
+
+
+
+#Interp 1d by Andrei S. Pavlov License: MIT License (MIT)
+
+ITERATION_SOLVER_SIZE_LIMIT = 11
+CHECK_INPUT = True
+
+def bisec_find_range(k: float, kp: list):
+    k1, k2 = [0, len(kp) - 1]
+    while k2 - k1 > 1:
+        _ = int((k2 + k1) / 2)
+        if k == kp[k1]:
+            return k1, k1
+        elif k == kp[k2]:
+            return k2, k2
+        elif kp[k1] < k < kp[_]:
+            k2 = _
+        elif kp[_] < k < kp[k2]:
+            k1 = _
+        else:
+            return _, _
+    return k1, k2
+
+def check_list1d_range(v: float, vp: list):
+    if v < vp[0] or v > vp[-1]:
+        raise ValueError('value is out of interpolation range')
+    if len(vp) < 2:
+        raise ValueError('list should have minimum two items')
+
+def check_input1d(x: float, xp: list, yp: list):
+    check_list1d_range(x, xp)
+    if len(yp) < 2:
+        raise ValueError('list should have minimum two items')
+    if len(xp) != len(yp):
+        raise ValueError('lists should have same length')
+
+def interp1d_bisec(x: float, xp: list, yp: list):
+    i1, i2 = bisec_find_range(x, xp)
+    return yp[i1] + ((x - xp[i1]) / (xp[i2] - xp[i1])) * (yp[i2] - yp[i1]) if i1 != i2 else yp[i1]
+
+def interp1d_iter(x: float, xp: list, yp: list):
+    for ii in range(0, len(xp) - 1):
+        if xp[ii] <= x <= xp[ii + 1]:
+            return yp[ii] + ((x - xp[ii]) / (xp[ii + 1] - xp[ii])) * (yp[ii + 1] - yp[ii])
+    return ValueError('Solution is not find')
+
+def interp1ds(x: float, xp: list, yp: list, make_checks: bool = CHECK_INPUT) -> float:
+    if make_checks:
+        check_input1d(x, xp, yp)
+    return interp1d_bisec(x, xp, yp) if len(xp) > ITERATION_SOLVER_SIZE_LIMIT else interp1d_iter(x, xp, yp)
 
 
 
@@ -330,6 +381,91 @@ def itd_baseline_extract(data: list[int]) -> (list[int], list[int]):
             kij = (Lk[k + 1] - Lk[k]) / (x[extrema_indices[k + 1]] - x[extrema_indices[k]])  # $compute the slope K
             L[j] = Lk[k] + kij * (x[j] - x[extrema_indices[k]])
 
+    H = numpy.subtract(x, L)
+
+    return L,H
+def multidim_intersect(arr1, arr2):
+    arr1_view = arr1.view([('',arr1.dtype)]*arr1.shape[1])
+    arr2_view = arr2.view([('',arr2.dtype)]*arr2.shape[1])
+    intersected = numpy.intersect1d(arr1_view, arr2_view)
+    return intersected.view(arr1.dtype).reshape(-1, arr1.shape[1])
+
+def itd_baseline_extractr(data: list[int]) -> (list[int], list[int]):
+
+   #dt = np.dtype([('value', np.float64, 16), ('index', np.int, (2,))])
+    x = numpy.zeros_like(data)#   (data.shape, dtype=dt)
+    x[:] = numpy.transpose(data[:]) #x=x(:)';
+    t = list(range(x.size))
+    # t=1:length(x); should do the same as this
+
+
+    alpha=0.5
+    idx_max = detect_peaks(x)
+    val_max = x[idx_max] #get peaks based on indexes
+    idx_min= detect_peaks(-x)
+    val_min = x[idx_min]
+    val_min= -val_min
+
+
+    idx_cb = numpy.union1d(idx_max, idx_min)
+
+
+    print(idx_max.size, val_max.size, idx_min.size, val_min.size)
+
+    if (min(idx_max) < min(idx_min)):
+        idx_min = numpy.append(idx_max[0], idx_min[:])
+        val_min = numpy.append(val_min[0], val_min[:])
+
+    elif (min(idx_max) > min(idx_min)):
+        idx_max = numpy.append(idx_min[0], idx_max[:])
+        val_max = numpy.append(val_max[0], val_max[:])
+
+    if (max(idx_max) > max(idx_min)):
+        idx_min = numpy.append(idx_min[:], idx_max[-1])
+        val_min = numpy.append(val_min[:], val_min[-1])
+    elif (max(idx_max) < max(idx_min)):
+        idx_max = numpy.append(idx_max[:], idx_min[-1])
+        val_max = numpy.append(val_max[:], val_max[-1])
+
+
+    H = numpy.zeros_like(x)
+    L = numpy.zeros_like(x)
+
+    #vq = interp1(x,v,xq) returns interpolated values of a 1-D function at specific query points using linear interpolation.
+    #Vector x contains the sample points, and v contains the corresponding values, v(x). Vector xq contains the coordinates of the query points.
+    #Max_line = interp1(idx_max, val_max, t, 'linear');
+
+
+    Max_line = interp1d(idx_max, val_max, kind='linear', bounds_error=False, fill_value="extrapolate")(idx_min)
+    Min_line = interp1d(idx_min, val_min, kind='linear', bounds_error=False, fill_value="extrapolate")(idx_max)
+    Lk1 = alpha * Max_line + val_min * (1 - alpha)
+    Lk2 = alpha * Min_line + val_max * (1 - alpha)
+
+
+    Lk1=  numpy.hstack((idx_max[:], Lk1[:]))  #Lk1=[idx_min(:),Lk1(:)];
+    Lk2= numpy.hstack((idx_min[:],  Lk2[:]))
+
+    Lk = numpy.vstack((Lk1,Lk2))
+    Lk_col_2 = numpy.argsort(Lk,axis=1) #an_array[numpy.argsort(an_array[:, 0])]
+   #confident above here that we've matched the code
+    Lk_sorted= numpy.asarray(np.take_along_axis(Lk, Lk_col_2, axis=1))
+    Lk=numpy.delete(Lk_sorted,-1,1)
+    Lk=numpy.delete(Lk,0,1)
+
+    rd = numpy.append([1],Lk[0:1])
+    vc = numpy.append(len(x), Lk[-1:2])
+
+
+    Lk=numpy.vstack((Lk[0:1],Lk[0],Lk[1],Lk[-1:2]))
+    print(Lk.shape)
+
+    idx_Xk = numpy.concatenate(([1], idx_cb, [x.size]))  # idx_Xk=[1,idx_cb,length(x)];
+
+    for k in range(len(idx_Xk) - 1):
+        for j in range(idx_Xk[k], idx_Xk[k + 1]):
+            kij = (Lk[k + 1] - Lk[k]) / (x[idx_Xk[k + 1]] - x[idx_Xk[k]])  # $compute the slope K
+            L[j] = Lk[k] + kij * (x[j] - x[idx_Xk[k]])
+#
     H = numpy.subtract(x, L)
 
     return L,H
