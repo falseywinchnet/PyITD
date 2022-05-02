@@ -121,36 +121,6 @@ def shift3dximg(arr: list[numpy.float32], num: int, fill_value: list[numpy.float
 #if the arrays are not the same size, don't attempt to use coordinates for fill value- it will fail.
 
 
-
-#Interp 1d by Andrei S. Pavlov License: MIT License (MIT)
-
-ITERATION_SOLVER_SIZE_LIMIT = 11
-CHECK_INPUT = True
-
-@numba.jit
-def bisec_find_range(k: float, kp: list):
-    k1, k2 = [0, len(kp) - 1]
-    while k2 - k1 > 1:
-        _ = int((k2 + k1) / 2)
-        if k == kp[k1]:
-            return k1, k1
-        elif k == kp[k2]:
-            return k2, k2
-        elif kp[k1] < k < kp[_]:
-            k2 = _
-        elif kp[_] < k < kp[k2]:
-            k1 = _
-        else:
-            return _, _
-    return k1, k2
-
-@numba.jit
-def interp1ds(x: float, xp: list, yp: list) -> float:
-    i1, i2 = bisec_find_range(x, xp)
-    return yp[i1] + ((x - xp[i1]) / (xp[i2] - xp[i1])) * (yp[i2] - yp[i1]) if i1 != i2 else yp[i1]
-
-
-
 #numba doesnt support numpy.isin yet
 @numba.njit(parallel=True)
 def isin(a, b):
@@ -291,6 +261,7 @@ def multidim_intersect(arr1, arr2):
     intersected = numpy.intersect1d(arr1_view, arr2_view)
     return intersected.view(arr1.dtype).reshape(-1, arr1.shape[1])
 
+
 def itd_baseline_extract(data: list[int]) -> (list[int], list[int]):
 
    #dt = np.dtype([('value', np.float64, 16), ('index', np.int, (2,))])
@@ -317,7 +288,7 @@ def itd_baseline_extract(data: list[int]) -> (list[int], list[int]):
 
 
     num_extrema = len(val_max) + len(val_min)# numpy.union1d(idx_max,idx_min)
-    extrema_indices = np.zeros((num_extrema + 2), dtype=int)
+    extrema_indices = np.zeros(((num_extrema + 2)), dtype=numpy.int)
     extrema_indices[1:-1] = np.union1d(idx_max, idx_min)
     extrema_indices[-1] = len(x) - 1
 
@@ -336,8 +307,9 @@ def itd_baseline_extract(data: list[int]) -> (list[int], list[int]):
         (x[extrema_indices[k + 1]] - x[extrema_indices[k - 1]])) + \
                             alpha * x[extrema_indices[k]]
 
-    interpolator = interp1d(extrema_indices, baseline_knots / x[extrema_indices], kind='linear')(t)
+    interpolator = numpy.interp(t,extrema_indices, baseline_knots / x[extrema_indices])
 
+    #print(interpolator_numba,interpolator,len(interpolator), len(interpolator_numba))
     Lk1 = np.asarray(alpha * interpolator[idx_min] + val_min * (1 - alpha))
     Lk2 = np.asarray(alpha * interpolator[idx_max] + val_max * (1 - alpha))
 
