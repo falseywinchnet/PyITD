@@ -425,10 +425,13 @@ def itd_baseline_extract(data: list[int]) -> (list[int], list[int]):
     #thank god for octave online or i would have never figured this shit out
     #fucking matlab!
 
-    idx_Xk = numpy.concatenate(([0], extrema_indices -2, [x.size]))  # idx_Xk=[1,idx_cb,length(x)];
+    idx_Xk = numpy.concatenate(([0], extrema_indices, [x.size]))  # idx_Xk=[1,idx_cb,length(x)];
+    #idx_Xk length
     for k in range(len(idx_Xk) - 1):
         for j in range(idx_Xk[k], idx_Xk[k + 1]):
-            kij = (Lk[k + 1, 1] - Lk[k,1]) / (x[idx_Xk[k + 1]] - x[idx_Xk[k]])  # $compute the slope K
+            vk = (Lk[k + 1, 1] - Lk[k,1])
+            sk =  (x[idx_Xk[k + 1]] - x[idx_Xk[k]])
+            kij = vk / sk  # $compute the slope K
             L[j] = Lk[k,1] + kij * (x[j] - x[idx_Xk[k]])
 #
     H = numpy.subtract(x, L)
