@@ -252,6 +252,7 @@ def ITD(data: list[int]):
 
         STOP = stop_iter(xx, counter, N_max, E_x)
         if STOP:
+            print("reached stop in ", counter, " iterations.")
             H = numpy.vstack((H, numpy.asarray(L1)))
             break
         xx = numpy.asarray(L1)
@@ -402,19 +403,17 @@ class FilterRun(Thread):
         #normalize inputs
 
         results = ITD(audio[:, 0])
-        print(results.shape)
         results = numpy.squeeze(numpy.asarray(results))
-        #results = numpy.swapaxes(results,0,1)
         print("results ", results.shape)
         comparison = numpy.sum(results, axis=1)
         comparison = comparison
         sumc = numpy.sum(comparison)
         sumd = numpy.sum(audio[:, 0])
-        print(sumc, sumd)
-        #numpy.flip(results)
+        print(abs(sumc - sumd))
         #x = numpy.ravel(results, order='C')
         #self.processedrb.write(self.buffer.astype(dtype=self.dtype), error=True) #UNCOMMENT ALSO PLAY
-        #Z, freqs, t = mlab.specgram(x, NFFT=256, Fs=len(x), detrend=None, window=None, noverlap=223, pad_to=None, scale_by_freq=None, mode="default")
+       # Z, freqs, t = mlab.specgram(x, NFFT=256, Fs=len(x), detrend=None, window=None, noverlap=223, pad_to=None, scale_by_freq=None, mode="default")
+
         c = (255*(results - np.min(results))/np.ptp(results)).astype(int)
         image = c.astype('float64')
         # https://stackoverflow.com/questions/39359693/single-valued-array-to-rgba-array-using-custom-color-map-in-python
@@ -425,8 +424,9 @@ class FilterRun(Thread):
         #np.set_printoptions(threshold=np.inf, linewidth=200)
         #self.cleanspecbuf.growing_write(arr_color)
         #with open("ITD.txt", "ab") as f:
-        #    f.write(b"\n")
-        #    numpy.savetxt(f, results, fmt='%.18e', delimiter=' ', newline='\n', header='', footer='', comments='# ', encoding=None)
+         #   f.write(b"\n\n")
+         #   r1 = numpy.flip(results)
+         #   numpy.savetxt(f, r1, fmt='%.18e', delimiter=' ', newline='\n', header='', footer='', comments='# ', encoding=None)
 
 
         return
@@ -482,7 +482,7 @@ class StreamSampler(object):
             pass
         return cls.dtype_to_paformat[dtype.name]
 
-    def __init__(self, sample_rate=8000, channels=2, buffer_delay=1.5,  # or 1.5, measured in seconds
+    def __init__(self, sample_rate=44100, channels=2, buffer_delay=1.5,  # or 1.5, measured in seconds
                  micindex=1, speakerindex=1, dtype=numpy.float32):
         #22050 is a common sampling rate for data analysis
         self.pa = pyaudio.PyAudio()
@@ -782,7 +782,7 @@ if __name__ == "__main__":
         if len(SS.cleanspectrogrambuffer) > 60:
             SS.texture2 = shift3dximg(SS.texture2, -1, numpy.rot90(SS.cleanspectrogrambuffer.read(1), 1))
         if len(SS.cleanspectrogrambuffer) > 180: #clearly this is wrooong
-            discard = SS.cleanspectrogrambuffer.read(1) #sneakily throw away rows until we're back to sanity
+            discard = SS.cleanspectrogrambuffer.read(10) #sneakily throw away rows until we're back to sanity
 
 
 
