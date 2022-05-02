@@ -127,6 +127,7 @@ def shift3dximg(arr: list[numpy.float32], num: int, fill_value: list[numpy.float
 ITERATION_SOLVER_SIZE_LIMIT = 11
 CHECK_INPUT = True
 
+@numba.jit
 def bisec_find_range(k: float, kp: list):
     k1, k2 = [0, len(kp) - 1]
     while k2 - k1 > 1:
@@ -143,33 +144,10 @@ def bisec_find_range(k: float, kp: list):
             return _, _
     return k1, k2
 
-def check_list1d_range(v: float, vp: list):
-    if v < vp[0] or v > vp[-1]:
-        raise ValueError('value is out of interpolation range')
-    if len(vp) < 2:
-        raise ValueError('list should have minimum two items')
-
-def check_input1d(x: float, xp: list, yp: list):
-    check_list1d_range(x, xp)
-    if len(yp) < 2:
-        raise ValueError('list should have minimum two items')
-    if len(xp) != len(yp):
-        raise ValueError('lists should have same length')
-
-def interp1d_bisec(x: float, xp: list, yp: list):
+@numba.jit
+def interp1ds(x: float, xp: list, yp: list) -> float:
     i1, i2 = bisec_find_range(x, xp)
     return yp[i1] + ((x - xp[i1]) / (xp[i2] - xp[i1])) * (yp[i2] - yp[i1]) if i1 != i2 else yp[i1]
-
-def interp1d_iter(x: float, xp: list, yp: list):
-    for ii in range(0, len(xp) - 1):
-        if xp[ii] <= x <= xp[ii + 1]:
-            return yp[ii] + ((x - xp[ii]) / (xp[ii + 1] - xp[ii])) * (yp[ii + 1] - yp[ii])
-    return ValueError('Solution is not find')
-
-def interp1ds(x: float, xp: list, yp: list, make_checks: bool = CHECK_INPUT) -> float:
-    if make_checks:
-        check_input1d(x, xp, yp)
-    return interp1d_bisec(x, xp, yp) if len(xp) > ITERATION_SOLVER_SIZE_LIMIT else interp1d_iter(x, xp, yp)
 
 
 
@@ -307,7 +285,7 @@ def stop_iter(xx,counter,N_max,E_x) -> (bool):
 #% Version 1.0.0
 #% 2018-11-04"""
 
-def itd_baseline_extract(data: list[int]) -> (list[int], list[int]):
+def itd_baseline_extractx(data: list[int]) -> (list[int], list[int]):
 
    #dt = np.dtype([('value', np.float64, 16), ('index', np.int, (2,))])
     x = numpy.zeros_like(data)#   (data.shape, dtype=dt)
@@ -334,18 +312,6 @@ def itd_baseline_extract(data: list[int]) -> (list[int], list[int]):
     baseline_knots[0] = np.mean(x[:2])
     baseline_knots[-1] = np.mean(x[-2:])
 
-
-    #H = numpy.zeros_like(x)
-
-    #https://localcoder.org/why-does-matlab-interp1-produce-different-results-than-numpy-interp
-   # "interp1(x,v,xq) returns interpolated values of a 1-D function at specific query points using linear interpolation.
-    # Vector x contains the sample points, and v contains the corresponding values, v(x).
-    # Vector xq contains the coordinates of the query points."
-
-    num_extrema = len(val_max) + len(val_min)
-
-    # plt.plot(x[extrema_indices], np.linspace(0, 10, len(extrema_indices)), 'C2.-', lw=0.3, ms=1)
-    # plt.xlim(0, 0.2)
 
     baseline_knots = np.zeros(len(extrema_indices))
     baseline_knots[0] = np.mean(x[:2])
@@ -384,20 +350,20 @@ def itd_baseline_extract(data: list[int]) -> (list[int], list[int]):
     H = numpy.subtract(x, L)
 
     return L,H
+
+
 def multidim_intersect(arr1, arr2):
     arr1_view = arr1.view([('',arr1.dtype)]*arr1.shape[1])
     arr2_view = arr2.view([('',arr2.dtype)]*arr2.shape[1])
     intersected = numpy.intersect1d(arr1_view, arr2_view)
     return intersected.view(arr1.dtype).reshape(-1, arr1.shape[1])
 
-def itd_baseline_extractr(data: list[int]) -> (list[int], list[int]):
+def itd_baseline_extract(data: list[int]) -> (list[int], list[int]):
 
    #dt = np.dtype([('value', np.float64, 16), ('index', np.int, (2,))])
-    x = numpy.zeros_like(data)#   (data.shape, dtype=dt)
-    x[:] = numpy.transpose(data[:]) #x=x(:)';
+    x = numpy.asarray(numpy.transpose(data[:])) #x=x(:)';
     t = list(range(x.size))
     # t=1:length(x); should do the same as this
-
 
     alpha=0.5
     idx_max = detect_peaks(x)
@@ -406,65 +372,64 @@ def itd_baseline_extractr(data: list[int]) -> (list[int], list[int]):
     val_min = x[idx_min]
     val_min= -val_min
 
-
-    idx_cb = numpy.union1d(idx_max, idx_min)
-
-
-    print(idx_max.size, val_max.size, idx_min.size, val_min.size)
-
-    if (min(idx_max) < min(idx_min)):
-        idx_min = numpy.append(idx_max[0], idx_min[:])
-        val_min = numpy.append(val_min[0], val_min[:])
-
-    elif (min(idx_max) > min(idx_min)):
-        idx_max = numpy.append(idx_min[0], idx_max[:])
-        val_max = numpy.append(val_max[0], val_max[:])
-
-    if (max(idx_max) > max(idx_min)):
-        idx_min = numpy.append(idx_min[:], idx_max[-1])
-        val_min = numpy.append(val_min[:], val_min[-1])
-    elif (max(idx_max) < max(idx_min)):
-        idx_max = numpy.append(idx_max[:], idx_min[-1])
-        val_max = numpy.append(val_max[:], val_max[-1])
-
-
     H = numpy.zeros_like(x)
     L = numpy.zeros_like(x)
 
-    #vq = interp1(x,v,xq) returns interpolated values of a 1-D function at specific query points using linear interpolation.
-    #Vector x contains the sample points, and v contains the corresponding values, v(x). Vector xq contains the coordinates of the query points.
-    #Max_line = interp1(idx_max, val_max, t, 'linear');
+    #y_interp = np.interp(x_interp, x, y) yields an interpolation of the function y_interp = f(x_interp)
+   # based on a previous interpolation y = f(x), where x.size = y.size, x_interp.size = y_interp.size.
+   #scipy is (idx_min,val_min)(t)[idx_max]
+   #interpolator = interp1d(extrema_indices, baseline_knots / x[extrema_indices], kind='linear')(t)
+
+   #x = np.interp(y_max, y_data, x_data,  left=None, right=None, period=None)
+   #max_line = numpy.interp(max(max_knots),max_knots, idx_max,  left=None, right=None, period=None)[t]
 
 
-    Max_line = interp1d(idx_max, val_max, kind='linear', bounds_error=False, fill_value="extrapolate")(idx_min)
-    Min_line = interp1d(idx_min, val_min, kind='linear', bounds_error=False, fill_value="extrapolate")(idx_max)
-    Lk1 = alpha * Max_line + val_min * (1 - alpha)
-    Lk2 = alpha * Min_line + val_max * (1 - alpha)
+    num_extrema = len(val_max) + len(val_min)# numpy.union1d(idx_max,idx_min)
+    extrema_indices = np.zeros((num_extrema + 2), dtype=int)
+    extrema_indices[1:-1] = np.union1d(idx_max, idx_min)
+    extrema_indices[-1] = len(x) - 1
+
+    baseline_knots = np.zeros(len(extrema_indices))
+    baseline_knots[0] = np.mean(x[:2])
+    baseline_knots[-1] = np.mean(x[-2:])
 
 
-    Lk1=  numpy.hstack((idx_max[:], Lk1[:]))  #Lk1=[idx_min(:),Lk1(:)];
-    Lk2= numpy.hstack((idx_min[:],  Lk2[:]))
+    baseline_knots = np.zeros(len(extrema_indices))
+    baseline_knots[0] = np.mean(x[:2])
+    baseline_knots[-1] = np.mean(x[-2:])
 
+    for k in range(1, len(extrema_indices) - 1):
+        baseline_knots[k] = alpha * (x[extrema_indices[k - 1]] + \
+        (extrema_indices[k] - extrema_indices[k - 1]) / (extrema_indices[k + 1] - extrema_indices[k - 1]) * \
+        (x[extrema_indices[k + 1]] - x[extrema_indices[k - 1]])) + \
+                            alpha * x[extrema_indices[k]]
+
+    interpolator1 = interp1d(extrema_indices, baseline_knots / x[extrema_indices], kind='linear')(t)
+    interpolator2 = interp1d(extrema_indices, baseline_knots / x[extrema_indices], kind='linear')(t)
+
+    Lk1 = np.asarray(alpha * interpolator1[idx_min] + val_min * (1 - alpha))
+    Lk2 = np.asarray(alpha * interpolator2[idx_max] + val_max * (1 - alpha))
+
+
+
+
+    Lk1 = numpy.hstack((np.atleast_2d(idx_min).T ,np.atleast_2d(Lk1).T))
+    Lk2 = numpy.hstack((np.atleast_2d(idx_max).T, np.atleast_2d(Lk2).T))
     Lk = numpy.vstack((Lk1,Lk2))
-    Lk_col_2 = numpy.argsort(Lk,axis=1) #an_array[numpy.argsort(an_array[:, 0])]
-   #confident above here that we've matched the code
-    Lk_sorted= numpy.asarray(np.take_along_axis(Lk, Lk_col_2, axis=1))
-    Lk=numpy.delete(Lk_sorted,-1,1)
-    Lk=numpy.delete(Lk,0,1)
+    Lk = Lk[Lk[:,1].argsort()]
+    Lk = Lk[1:-1,:]
+    Ls = numpy.asarray(([1],Lk[0,1]))
+    Lk = numpy.vstack((Ls,Lk))
+    Ls = numpy.asarray(([len(x)], Lk[-1, 1]))
+    Lk = numpy.vstack((Lk, Ls))
+    #thank god for octave online or i would have never figured this shit out
+    #fucking matlab!
 
-    rd = numpy.append([1],Lk[0:1])
-    vc = numpy.append(len(x), Lk[-1:2])
-
-
-    Lk=numpy.vstack((Lk[0:1],Lk[0],Lk[1],Lk[-1:2]))
-    print(Lk.shape)
-
-    idx_Xk = numpy.concatenate(([1], idx_cb, [x.size]))  # idx_Xk=[1,idx_cb,length(x)];
-
+    idx_Xk = numpy.concatenate(([0], extrema_indices -2, [x.size]))  # idx_Xk=[1,idx_cb,length(x)];
     for k in range(len(idx_Xk) - 1):
         for j in range(idx_Xk[k], idx_Xk[k + 1]):
-            kij = (Lk[k + 1] - Lk[k]) / (x[idx_Xk[k + 1]] - x[idx_Xk[k]])  # $compute the slope K
-            L[j] = Lk[k] + kij * (x[j] - x[idx_Xk[k]])
+            kij = (Lk[k + 1, 1] - Lk[k,1]) / (x[idx_Xk[k + 1]] - x[idx_Xk[k]])  # $compute the slope K
+            L[j] = Lk[k,1] + kij * (x[j] - x[idx_Xk[k]])
 #
     H = numpy.subtract(x, L)
 
@@ -508,13 +473,13 @@ class FilterRun(Thread):
         #normalize inputs
         origin = audio[:, 0]
         results = ITD(audio[:, 0])
+        print(results.shape)
         results = numpy.squeeze(numpy.asarray(results))
         results = numpy.swapaxes(results,0,1)
         comparison = numpy.sum(results, axis=1)
         comparison = comparison * 2.0
         sumc = numpy.sum(comparison)
         sumd = numpy.sum(audio)
-        print(sumc,sumd)
         #numpy.flip(results)
         #x = numpy.ravel(results, order='C')
         #self.processedrb.write(self.buffer.astype(dtype=self.dtype), error=True) #UNCOMMENT ALSO PLAY
