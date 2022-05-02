@@ -121,6 +121,9 @@ def shift3dximg(arr: list[numpy.float32], num: int, fill_value: list[numpy.float
 #if the arrays are not the same size, don't attempt to use coordinates for fill value- it will fail.
 
 
+ITERATION_SOLVER_SIZE_LIMIT = 11
+CHECK_INPUT = True
+
 #numba doesnt support numpy.isin yet
 @numba.njit(parallel=True)
 def isin(a, b):
@@ -371,26 +374,34 @@ class FilterRun(Thread):
     def write_filtered_data(self):
 
         numpy.copyto(self.buffer, self.rb.read(self.processing_size).astype(dtype=numpy.float64))
-        audio = (1.0*(self.buffer - np.min(self.buffer))/np.ptp(self.buffer)).astype(numpy.float64)
+        audio = (1.0*(self.buffer[:, 0] - np.min(self.buffer))/np.ptp(self.buffer)).astype(numpy.float64)
         #normalize inputs
 
-        results = ITD(audio[:, 0])
+        results = ITD(audio)
         results = numpy.squeeze(numpy.asarray(results))
         print("results ", results.shape)
         comparison = numpy.sum(results, axis=1)
         comparison = comparison
         sumc = numpy.sum(comparison)
-        sumd = numpy.sum(audio[:, 0])
+        sumd = numpy.sum(audio)
         print(abs(sumc - sumd))
-        #x = numpy.ravel(results, order='C')
-        #self.processedrb.write(self.buffer.astype(dtype=self.dtype), error=True) #UNCOMMENT ALSO PLAY
-       # Z, freqs, t = mlab.specgram(x, NFFT=256, Fs=len(x), detrend=None, window=None, noverlap=223, pad_to=None, scale_by_freq=None, mode="default")
 
-        c = (255*(results - np.min(results))/np.ptp(results)).astype(int)
-        image = c.astype('float64')
+        #x = numpy.ravel(results, order='C')
+        x = results[0,:]
+        nz = results[1,:]
+        xr = numpy.add(x,nz)
+        denormalized_d = xr * (np.ptp(self.buffer) - np.min(self.buffer)) + np.min(self.buffer)
+
+        #self.processedrb.write(self.buffer.astype(dtype=self.dtype), error=True) #UNCOMMENT ALSO PLAY
+        Z, freqs, t = mlab.specgram(denormalized_d, NFFT=256, Fs=44100, detrend=None, window=None, noverlap=223, pad_to=None, scale_by_freq=None, mode="default")
+        NV, freqs, t = mlab.specgram(self.buffer[:, 0], NFFT=256, Fs=44100, detrend=None, window=None, noverlap=223, pad_to=None, scale_by_freq=None, mode="default")
+        XZ = Z + NV
+        ##c = (255*(results - np.min(results))/np.ptp(results)).astype(int)
+        #image = c.astype('float64')
         # https://stackoverflow.com/questions/39359693/single-valued-array-to-rgba-array-using-custom-color-map-in-python
-        arr_color = self.SM.to_rgba(image, bytes=False, norm=True)
-        arr_color = snowy.resize(arr_color, width=60, height=100)  # in the future, this width will be 60.
+        arr_color = self.SM.to_rgba(NV, bytes=False, norm=True)
+        arr_color = arr_color[:30,:,:]
+        arr_color = snowy.resize(arr_color, width=60, height=100)
         arr_color = numpy.rot90(arr_color)  # rotate it and jam it in the buffer lengthwise
         self.cleanspecbuf.growing_write(arr_color)
         #np.set_printoptions(threshold=np.inf, linewidth=200)
