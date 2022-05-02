@@ -237,7 +237,6 @@ def ITD(data: list[int]):
     Lx, Hx = itd_baseline_extract(xx)
     L1 = numpy.asarray(Lx)
     H = numpy.asarray(Hx)
-
     STOP = stop_iter(xx, counter, N_max, E_x)
     if STOP:
         print("finished in one iteration")
@@ -285,73 +284,6 @@ def stop_iter(xx,counter,N_max,E_x) -> (bool):
 #% Version 1.0.0
 #% 2018-11-04"""
 
-def itd_baseline_extractx(data: list[int]) -> (list[int], list[int]):
-
-   #dt = np.dtype([('value', np.float64, 16), ('index', np.int, (2,))])
-    x = numpy.zeros_like(data)#   (data.shape, dtype=dt)
-    x[:] = numpy.transpose(data[:]) #x=x(:)';
-    t = list(range(x.size))
-    # t=1:length(x); should do the same as this
-
-
-    alpha=0.5
-    idx_max = detect_peaks(x)
-
-
-    val_max = x[idx_max] #get peaks based on indexes
-    idx_min= detect_peaks(-x)
-    val_min = x[idx_min]
-    val_min= -val_min
-
-    num_extrema = len(val_max) + len(val_min)# numpy.union1d(idx_max,idx_min)
-    extrema_indices = np.zeros((num_extrema + 2), dtype=int)
-    extrema_indices[1:-1] = np.union1d(idx_max, idx_min)
-    extrema_indices[-1] = len(x) - 1
-
-    baseline_knots = np.zeros(len(extrema_indices))
-    baseline_knots[0] = np.mean(x[:2])
-    baseline_knots[-1] = np.mean(x[-2:])
-
-
-    baseline_knots = np.zeros(len(extrema_indices))
-    baseline_knots[0] = np.mean(x[:2])
-    baseline_knots[-1] = np.mean(x[-2:])
-
-    L = np.zeros_like(x)
-
-
-    for k in range(1, len(extrema_indices) - 1):
-        baseline_knots[k] = alpha * (x[extrema_indices[k - 1]] + \
-        (extrema_indices[k] - extrema_indices[k - 1]) / (extrema_indices[k + 1] - extrema_indices[k - 1]) * \
-        (x[extrema_indices[k + 1]] - x[extrema_indices[k - 1]])) + \
-                            alpha * x[extrema_indices[k]]
-
-    interpolator = interp1d(extrema_indices, baseline_knots / x[extrema_indices], kind='linear')(t)
-
-    Lk1=interpolator[idx_min]+val_min*(1-alpha)
-    Lk2=interpolator[idx_max]+val_max*(1-alpha)
-   # Lk1=  numpy.concatenate((idx_min, Lk1))  #Lk1=[idx_min(:),Lk1(:)];
-  #  Lk2= numpy.concatenate((idx_max,Lk2))
-
-    Lk = np.zeros((num_extrema + 2), dtype=int)
-    Lk[1:-1] = numpy.concatenate((Lk1,Lk2))
-    Lk[-1] = len(x) - 1
-
-   # Lk=numpy.concatenate((Lk1,Lk2))
-    #Lk_col_2 = numpy.argsort(Lk, axis= 0) # sort by first axis?
-    #Lk_sorted= Lk[Lk_col_2,:] #Lk_sorted=Lk(Lk_col_2,:);
-    #Lk=Lk_sorted[1:-1,:]
-
-    for k in range(len(extrema_indices) - 1):
-        for j in range(extrema_indices[k], extrema_indices[k + 1]):
-            kij = (Lk[k + 1] - Lk[k]) / (x[extrema_indices[k + 1]] - x[extrema_indices[k]])  # $compute the slope K
-            L[j] = Lk[k] + kij * (x[j] - x[extrema_indices[k]])
-
-    H = numpy.subtract(x, L)
-
-    return L,H
-
-
 def multidim_intersect(arr1, arr2):
     arr1_view = arr1.view([('',arr1.dtype)]*arr1.shape[1])
     arr2_view = arr2.view([('',arr2.dtype)]*arr2.shape[1])
@@ -374,14 +306,13 @@ def itd_baseline_extract(data: list[int]) -> (list[int], list[int]):
 
     H = numpy.zeros_like(x)
     L = numpy.zeros_like(x)
-
     #y_interp = np.interp(x_interp, x, y) yields an interpolation of the function y_interp = f(x_interp)
-   # based on a previous interpolation y = f(x), where x.size = y.size, x_interp.size = y_interp.size.
-   #scipy is (idx_min,val_min)(t)[idx_max]
-   #interpolator = interp1d(extrema_indices, baseline_knots / x[extrema_indices], kind='linear')(t)
+    # based on a previous interpolation y = f(x), where x.size = y.size, x_interp.size = y_interp.size.
+    #scipy is (idx_min,val_min)(t)[idx_max]
+    #interpolator = interp1d(extrema_indices, baseline_knots / x[extrema_indices], kind='linear')(t)
 
-   #x = np.interp(y_max, y_data, x_data,  left=None, right=None, period=None)
-   #max_line = numpy.interp(max(max_knots),max_knots, idx_max,  left=None, right=None, period=None)[t]
+    #x = np.interp(y_max, y_data, x_data,  left=None, right=None, period=None)
+    #max_line = numpy.interp(max(max_knots),max_knots, idx_max,  left=None, right=None, period=None)[t]
 
 
     num_extrema = len(val_max) + len(val_min)# numpy.union1d(idx_max,idx_min)
@@ -404,33 +335,28 @@ def itd_baseline_extract(data: list[int]) -> (list[int], list[int]):
         (x[extrema_indices[k + 1]] - x[extrema_indices[k - 1]])) + \
                             alpha * x[extrema_indices[k]]
 
-    interpolator1 = interp1d(extrema_indices, baseline_knots / x[extrema_indices], kind='linear')(t)
-    interpolator2 = interp1d(extrema_indices, baseline_knots / x[extrema_indices], kind='linear')(t)
+    interpolator = interp1d(extrema_indices, baseline_knots / x[extrema_indices], kind='linear')(t)
 
-    Lk1 = np.asarray(alpha * interpolator1[idx_min] + val_min * (1 - alpha))
-    Lk2 = np.asarray(alpha * interpolator2[idx_max] + val_max * (1 - alpha))
+    Lk1 = np.asarray(alpha * interpolator[idx_min] + val_min * (1 - alpha))
+    Lk2 = np.asarray(alpha * interpolator[idx_max] + val_max * (1 - alpha))
 
-
-
-
-    Lk1 = numpy.hstack((np.atleast_2d(idx_min).T ,np.atleast_2d(Lk1).T))
+    Lk1 = numpy.hstack((np.atleast_2d(idx_min).T, np.atleast_2d(Lk1).T))
     Lk2 = numpy.hstack((np.atleast_2d(idx_max).T, np.atleast_2d(Lk2).T))
     Lk = numpy.vstack((Lk1,Lk2))
     Lk = Lk[Lk[:,1].argsort()]
-    Lk = Lk[1:-1,:]
+    if Lk.size > 6:
+        Lk = Lk[1:-1,:]
+
     Ls = numpy.asarray(([1],Lk[0,1]))
     Lk = numpy.vstack((Ls,Lk))
     Ls = numpy.asarray(([len(x)], Lk[-1, 1]))
     Lk = numpy.vstack((Lk, Ls))
-    #thank god for octave online or i would have never figured this shit out
-    #fucking matlab!
 
     idx_Xk = numpy.concatenate(([0], extrema_indices, [x.size]))  # idx_Xk=[1,idx_cb,length(x)];
-    #idx_Xk length
-    for k in range(len(idx_Xk) - 1):
+    for k in range(len(idx_Xk) - 5):
         for j in range(idx_Xk[k], idx_Xk[k + 1]):
             vk = (Lk[k + 1, 1] - Lk[k,1])
-            sk =  (x[idx_Xk[k + 1]] - x[idx_Xk[k]])
+            sk = (x[idx_Xk[k + 1]] - x[idx_Xk[k]])
             kij = vk / sk  # $compute the slope K
             L[j] = Lk[k,1] + kij * (x[j] - x[idx_Xk[k]])
 #
@@ -474,15 +400,17 @@ class FilterRun(Thread):
         numpy.copyto(self.buffer, self.rb.read(self.processing_size).astype(dtype=numpy.float64))
         audio = (1.0*(self.buffer - np.min(self.buffer))/np.ptp(self.buffer)).astype(numpy.float64)
         #normalize inputs
-        origin = audio[:, 0]
+
         results = ITD(audio[:, 0])
         print(results.shape)
         results = numpy.squeeze(numpy.asarray(results))
-        results = numpy.swapaxes(results,0,1)
+        #results = numpy.swapaxes(results,0,1)
+        print("results ", results.shape)
         comparison = numpy.sum(results, axis=1)
-        comparison = comparison * 2.0
+        comparison = comparison
         sumc = numpy.sum(comparison)
-        sumd = numpy.sum(audio)
+        sumd = numpy.sum(audio[:, 0])
+        print(sumc, sumd)
         #numpy.flip(results)
         #x = numpy.ravel(results, order='C')
         #self.processedrb.write(self.buffer.astype(dtype=self.dtype), error=True) #UNCOMMENT ALSO PLAY
