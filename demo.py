@@ -61,6 +61,7 @@ from scipy.interpolate import interp1d
 import scipy
 import awkward as ak
 import numba
+from ssqueezepy import ssq_cwt, ssq_stft, extract_ridges, TestSignals
 
 
 
@@ -136,6 +137,186 @@ def isin(a, b):
             out[i]=False
     return out
 
+
+@numba.jit(numba.float64[:](numba.float64[:]),parallel=True,cache=True)
+def numba_fabada(data: [numpy.float64]):
+        #notes:
+        #The pythonic way to COPY an array is to do x[:] = y[:]
+        #do x=y and it wont copy it, so any changes made to X will also be made to Y.
+        #also, += does an append instead of a +
+        #math.sqrt is 7x faster than numpy.sqrt but not designed for complex numbers.
+        #specifying the type and size in advance of all variables accelerates their use, particularily when JIT is used.
+        #However, JIT does not permit arbitrary types like UNION? maybe it does but i havnt figured out how.
+        #this implementation uses a lot of for loops because they can be easily vectorized by simply replacing
+        #range with numba.prange and also because they will translate well to other languages
+        #this implementation of FABADA is not optimized for 2d arrays, however, it is easily swapped by changing the means
+        #estimation and by simply changing all other code to iterate over 2d instead of 1d
+        #care must be taken with numba parallelization/vectorization
+        with numba.objmode(start=numba.float64):
+            start = time.time()
+
+        iterations: int = 1
+        TAU: numpy.float64 = 2 * math.pi
+        N = data.size
+
+        #must establish zeros for the model or otherwise when data is empty, algorithm will return noise
+        bayesian_weight  = numpy.zeros_like(data)
+        bayesian_model = numpy.zeros_like(data)
+        model_weight = numpy.zeros_like(data)
+
+        #pre-declaring all arrays allows their memory to be allocated in advance
+        posterior_mean  = numpy.empty_like(data)
+        posterior_variance  = numpy.empty_like(data)
+        initial_evidence = numpy.empty_like(data)
+        evidence = numpy.empty_like(data)
+        prior_mean = numpy.empty_like(data)
+        prior_variance = numpy.empty_like(data)
+
+        #working set arrays, no real meaning, just to have work space
+        ja1 = numpy.empty_like(data)
+        ja2 = numpy.empty_like(data)
+        ja3 = numpy.empty_like(data)
+        ja4 = numpy.empty_like(data)
+
+        #eliminate divide by zero
+        data[data == 0.0] = 2.22044604925e-16
+        min_d: numpy.float64 = numpy.min(data)
+        max_d: numpy.float64 = numpy.ptp(data)
+        min: numpy.float64 = 2.22044604925e-16
+        max:numpy.float64 =  44100
+        #the higher max is, the less "crackle".
+        #The lower floor is, the less noise reduction is possible.
+        #floor can never be less than max/2.
+        #noise components are generally higher frequency.
+        #the higher the floor is set, the more attenuation of both noise and signal.
+
+
+        posterior_mean[:] = data[:]
+        prior_mean[:] = data[:]
+        data_mean = numpy.mean(data)  # get the mean
+        data_variance = numpy.empty_like(data)
+
+        for i in numba.prange(N):
+            data_variance[i] = numpy.abs(data_mean - max_d) ** 2
+
+        posterior_variance[:] = data_variance[:]
+
+        for i in numba.prange(N):
+            ja1[i] = ((0.0 - math.sqrt(data[i])) ** 2)
+            ja2[i] = ((0.0 + data_variance[i]) * 2)
+            ja3[i] = math.sqrt(TAU * (0.0 + data_variance[i]))
+        for i in numba.prange(N):
+            ja4[i] = math.exp(-ja1[i] / ja2[i])
+        for i in numba.prange(N):
+            evidence[i] = ja4[i] / ja3[i]
+        evidence_previous: numpy.float64 = numpy.mean(evidence)
+        initial_evidence[:] = evidence[:]
+
+        for i in numba.prange(N):
+            ja1[i] = data[i] - posterior_mean[i]
+        for i in numba.prange(N):
+            ja1[i] = ja1[i] ** 2.0 / data_variance[i]
+        chi2_data_min: numpy.float64 = numpy.sum(ja1)
+        chi2_pdf_previous: numpy.float64 = 0.0
+        chi2_pdf_derivative_previous: numpy.float64 = 0.0
+        # COMBINE MODELS FOR THE ESTIMATION
+
+
+        while 1:
+
+        # GENERATES PRIORS
+            prior_mean[:] = posterior_mean[:]
+            prior_mean[:-1] += posterior_mean[1:]
+            prior_mean[1:] += posterior_mean[:-1]
+            prior_mean[1:-1] /= 3
+            prior_mean[0] /= 2
+            prior_mean[-1] /= 2
+
+            # APPLY BAYES' THEOREM ((b\a)a)\b?
+            prior_variance[:] = posterior_variance[:]
+
+            for i in numba.prange(N):
+                posterior_variance[i] = 1.0 / (1.0/ data_variance[i] + 1.0 / prior_variance[i])
+            for i in numba.prange(N):
+                posterior_mean[i] = (((prior_mean[i] / prior_variance[i]) + ( data[i] / data_variance[i])) * posterior_variance[i])
+
+            # EVALUATE EVIDENCE
+
+            for i in numba.prange(N):
+                ja1[i] = ((prior_mean[i] - math.sqrt(data[i])) ** 2)
+                ja2[i] = ((prior_variance[i] + data_variance[i]) * 2)
+                ja3[i] = math.sqrt(TAU * (prior_variance[i] + data_variance[i]))
+            for i in numba.prange(N):
+                ja4[i] = math.exp(-ja1[i] / ja2[i])
+            for i in numba.prange(N):
+                evidence[i] = ja4[i] / ja3[i]
+
+            evidence_derivative: numpy.float64 = numpy.mean(evidence) - evidence_previous
+
+            # EVALUATE CHI2
+
+            for i in numba.prange(N):
+                ja1[i] = ((data[i] - posterior_mean[i]) ** 2 / data_variance[i])
+            chi2_data = numpy.sum(ja1)
+
+
+            # COMBINE MODELS FOR THE ESTIMATION
+            for i in numba.prange(N):
+                model_weight[i] = evidence[i] * chi2_data
+
+            for i in numba.prange(N):
+                bayesian_weight[i] = bayesian_weight[i] + model_weight[i]
+                bayesian_model[i] = bayesian_model[i] + (model_weight[i] * posterior_mean[i])
+
+            df: int = 5  # note: this isnt the right way to use this function. DF is supposed to be, like data.size but that would be enormous
+            #for any data set which is non-trivial. Remember, DF/2 - 1 becomes the exponent! For anything over a few hundred this quickly exceeds float64.
+            ## chi2.pdf(x, df) = 1 / (2*gamma(df/2)) * (x/2)**(df/2-1) * exp(-x/2)
+            gammar: numpy.float64 = (2. * math.lgamma(df / 2.))
+            gammaz: numpy.float64 = ((df / 2.) - 1.)
+            gamman: numpy.float64 = (chi2_data / 2.)
+            gammas: numpy.float64 = (numpy.sign(gamman) * (
+                        (abs(gamman)) ** gammaz))  #TODO
+            if math.isnan(gammas):
+                gammas = (numpy.sign(gamman) * ((abs(gamman)) * gammaz))
+            gammaq: numpy.float64 = math.exp(-chi2_data / 2.)
+            #for particularily large values, math.exp just returns 0.0
+            #TODO
+            gammaa: numpy.float64 = 1. / gammar
+            chi2_pdf = gammaa * gammas * gammaq
+
+            # COMBINE MODELS FOR THE ESTIMATION
+
+            chi2_pdf_derivative = chi2_pdf - chi2_pdf_previous
+            chi2_pdf_snd_derivative = chi2_pdf_derivative - chi2_pdf_derivative_previous
+            chi2_pdf_previous = chi2_pdf
+            chi2_pdf_derivative_previous = chi2_pdf_derivative
+            evidence_previous: numpy.float64 = evidence_derivative
+
+            with numba.objmode(current=numba.float64):
+                current = time.time()
+            timerun = (current - start) * 1000
+
+            if (
+                    (int(chi2_data) > data.size and chi2_pdf_snd_derivative >= 0)
+                    or (abs(evidence_derivative) < 0)
+                    or (iterations > 100)  # use no more than 95% of the time allocated per cycle
+            ):
+                break
+
+            iterations += 1
+
+
+            # COMBINE ITERATION ZERO
+        for i in numba.prange(N):
+            model_weight[i] = initial_evidence[i] * chi2_data_min
+        for i in numba.prange(N):
+            bayesian_weight[i] = (bayesian_weight[i]  + model_weight[i])
+            bayesian_model[i] = bayesian_model[i] + ( model_weight[i] *  data[i])
+
+        for i in numba.prange(N):
+            data[i] = bayesian_model[i] / bayesian_weight[i]
+
+        return data
 
 
 @numba.jit(numba.int64[:](numba.float64[:]), nopython=True, parallel=True, nogil=True,cache=True)
@@ -252,11 +433,43 @@ def stop_iter(xx,counter,N_max,E_x) -> (bool):
         return True
 
     return False
+#https://github.com/numba/numba/issues/4119
+@numba.jit(numba.float64[:](numba.float64[:],numba.float64[:]),parallel=True,nogil=True,cache=True)
+def numba_convolve_mode_valid_as_loop(arr, kernel):
+    m = arr.size
+    n = kernel.size
+    out_size = m - n + 1
+    out = numpy.empty(out_size, dtype=numpy.float64)
+    for i in numba.prange(out_size):
+        out[i] = numpy.dot(arr[i:i + n], kernel)
+    return out
 
-#"""% Matlab Written by Linshan Jia (jialinshan123@126.com)
-#% Xi'an Jiaotong University
-#% Version 1.0.0
-#% 2018-11-04"""
+@numba.jit(numba.float64[:](numba.float64[:]), nopython=True, parallel=True, nogil=True, cache=True)
+def savgol(data: list[numpy.float64]):
+    coeff = numpy.asarray([-0.08571429, 0.34285714, 0.48571429, 0.34285714, -0.08571429])
+    # pad_length = h * (width - 1) // 2# for width of 5, this defaults to 2...
+    data_pad = numpy.zeros(data.size + 4)
+    data_pad[2:data.size + 2] = data[0:data.size]  # leaving two on each side
+    firstval = 2 * data[0] - data[2:0:-1]
+    lastvals = 2 * data[-1] - data[-1:-3:-1]
+    data_pad[0] = firstval[0]
+    data_pad[1] = firstval[1]
+    data_pad[-1] = lastvals[1]
+    data_pad[-2] = lastvals[0]
+    new_data = numpy.zeros((data.size))
+
+    #
+    # multiply vec2 by vec1[0] = 2    4   6
+    # multiply vec2 by vec1[1] = -    3   6   9
+    # multiply vec2 by vec1[2] = -    -   4   8   12
+    # -----------------------------------------------
+    # add the above three      = 2    7   16  17  12
+
+    new_data[:] = numba_convolve_mode_valid_as_loop(data_pad[:], coeff[:])
+
+    # create the array of each set of averaging values
+
+    return new_data
 
 def multidim_intersect(arr1, arr2):
     arr1_view = arr1.view([('',arr1.dtype)]*arr1.shape[1])
@@ -339,6 +552,166 @@ def itd_baseline_extract(data: list[int]) -> (list[int], list[int]):
     H = numpy.subtract(x, L)
 
     return L,H
+import numpy as np
+from numba import njit
+
+@numba.njit(fastmath=True)
+def trilinear_interpolation_jit(
+    x_volume,
+    y_volume,
+    z_volume,
+    volume,
+    x_needed,
+    y_needed,
+    z_needed
+):
+    """
+    Trilinear interpolation (from Wikipedia)
+
+    :param x_volume: x points of the volume grid
+    :type crack_type: list or numpy.ndarray
+    :param y_volume: y points of the volume grid
+    :type crack_type: list or numpy.ndarray
+    :param x_volume: z points of the volume grid
+    :type crack_type: list or numpy.ndarray
+    :param volume:   volume
+    :type crack_type: list or numpy.ndarray
+    :param x_needed: desired x coordinate of volume
+    :type crack_type: float
+    :param y_needed: desired y coordinate of volume
+    :type crack_type: float
+    :param z_needed: desired z coordinate of volume
+    :type crack_type: float
+
+    :return volume_needed: desired value of the volume, i.e. volume(x_needed, y_needed, z_needed)
+    :type volume_needed: float
+    :author Pietro D'Antuono
+    """
+
+    # dimensinoal check
+    assert np.shape(volume) == (
+        len(x_volume), len(y_volume), len(z_volume)
+    ), "Incompatible lengths"
+    # check of the indices needed for the correct control volume definition
+    i = np.searchsorted(x_volume, x_needed)
+    j = np.searchsorted(y_volume, y_needed)
+    k = np.searchsorted(z_volume, z_needed)
+    # control volume definition
+    control_volume_coordinates = np.array(
+        [
+            [
+                x_volume[i - 1],
+                y_volume[j - 1],
+                z_volume[k - 1]
+            ],
+            [
+                x_volume[i],
+                y_volume[j],
+                z_volume[k]
+            ]
+        ]
+    )
+    xd = (
+        np.array([x_needed, y_needed, z_needed]) - control_volume_coordinates[0]
+    ) / (
+        control_volume_coordinates[1] - control_volume_coordinates[0]
+    )
+    # interpolation along x
+    c2 = [[0., 0.], [0., 0.]]
+    for m, n in [(0, 0), (0, 1), (1, 0), (1, 1)]:
+        c2[m][n] = volume[i - 1][j - 1 + m][k - 1 + n] \
+        * (1. - xd[0]) + volume[i][j - 1 + m][k - 1 + n] * xd[0]
+    # interpolation along y
+    c1 = [0., 0.]
+    c1[0] = c2[0][0] * (1. - xd[1]) + c2[1][0] * xd[1]
+    c1[1] = c2[0][1] * (1. - xd[1]) + c2[1][1] * xd[1]
+    # interpolation along z
+    volume_needed = c1[0] * (1. - xd[2]) + c1[1] * xd[2]
+    return volume_needed
+
+@njit(fastmath=True)
+def trilint_jit(
+    x_volume,
+    y_volume,
+    z_volume,
+    volume,
+    x_needed,
+    y_needed,
+    z_needed
+):
+    trilint_size = x_needed.size * y_needed.size * z_needed.size
+    jitted_trilint = np.zeros(trilint_size)
+    m = 0
+    for x in range(0, len(x_needed)):
+        for y in range(0, len(y_needed)):
+            for z in range(0, len(z_needed)):
+                jitted_trilint[m]=trilinear_interpolation_jit(
+                    x_volume,
+                    y_volume,
+                    z_volume,
+                    volume,
+                    x_needed[x],
+                    y_needed[y],
+                    z_needed[z]
+                )
+                m = m + 1
+    return jitted_trilint
+
+
+@numba.jit(numba.float64[:,:](numba.float64[:]))
+def decomposeinto3d(input: list[numpy.float64]):
+    #here's where the magic happens.
+    # decompose it into a three dimensional graph
+    #time corresponds to sample position in x.
+    #the elements are also sorted by frequency, and then the array is transposed
+    #and the position of each corresponds to frequency in another dimension.
+    #in a third dimension, energy corresponds to amplitude.
+    output = numpy.ndarray(input.size, input.size, numpy.ptp(input))  # create the terrain array
+    unique_elements, frequency = np.unique(input, return_counts=True)
+    sorted_indexes = np.argsort(frequency)[::-1]
+    #sorted_by_freq = unique_elements[sorted_indexes]
+    output[:,0] = range(len(input))
+    for each in output[:,1]:
+        output[each,sorted_indexes[each]] = input[each]#place the amplitude at the frequency point
+                                                        #to rerieve them, all we have to do later is reverse this.
+
+    return output
+
+
+@numba.jit(numba.float64[:,:,:](numba.float64[:,:,:]))
+def denoise3d(input: list[numpy.float64]):
+        #apply terrain walking methods to interpolate all results.
+        #we apply guassian smoothing to this terrain(energy minima).
+        #first dimension is index values
+        #ie
+       # 1 2 3 4 5 6 7 8 9 0
+        #our second dimension is sorted indexes- frequency
+       # ie
+        #1 22 23 24 40 90
+        #our third dimension is amplitude
+       # ie
+      #  1.3 5.3 20.1 305 503 30
+
+        #our first dimension is x
+        #our second dimension is y
+       # our third dimension is z
+        #input = [:,:]x, y where amplitude is placed at y(frequency) and time(x)
+        #as long as different decomopositional trends don't include multiple amplitudes at the same frequency and time
+        #- by definition this *should* be impossible- then this will result in a 3d graph of values.
+
+        x_volume = np.array([100., 1000.])
+        y_volume = np.array([0.2, 0.4, 0.6, 0.8, 1])
+        z_volume = np.array([0, 0.2, 0.5, 0.8, 1.])
+        x_needed = np.linspace(100, 1000, 10)
+        y_needed = np.linspace(0.3, 1, 60)
+        z_needed = np.linspace(0, 1, 7)
+        jitted_trilint = trilint_jit(
+            x_volume, y_volume, z_volume, input, x_needed, y_needed, z_needed
+        )
+
+        #incorporate terrain smoothing guassian filter here
+        output = 1
+        return output
 
 
 
@@ -374,36 +747,37 @@ class FilterRun(Thread):
     def write_filtered_data(self):
 
         numpy.copyto(self.buffer, self.rb.read(self.processing_size).astype(dtype=numpy.float64))
-        audio = (1.0*(self.buffer[:, 0] - np.min(self.buffer))/np.ptp(self.buffer)).astype(numpy.float64)
+        min_d: numpy.float64 = numpy.min(self.buffer[:, 0])
+        max_d: numpy.float64 = numpy.ptp(self.buffer[:, 0])
+        #audio = numpy.interp(self.buffer[:, 0], (min_d, max_d),(min, max))#normalize the data
+        audio = ((self.buffer[:, 0] - min_d) / (max_d - min_d)).astype(numpy.float64)
         #normalize inputs
 
         results = ITD(audio)
-        results = numpy.squeeze(numpy.asarray(results))
-        print("results ", results.shape)
-        comparison = numpy.sum(results, axis=1)
-        comparison = comparison
-        sumc = numpy.sum(comparison)
-        sumd = numpy.sum(audio)
-        print(abs(sumc - sumd))
+        results[-1,:] = savgol(results[-1,:]) #smooth the trend? not sure if this is needed or desired
+        result3d=numpy.ndarray((results[:,1].size,results[1,:].size)) #create the terrain array
+        for i in (results[:,1].size - 1):
+            result3d[i,:,:] = decomposeinto3d(results[i,:])
+        result3d = result3d.sum(axis=0)#generate the three dimensional representation
+        result3d = denoise3d(result3d)
+        resultsmooth = result3d[2,:]#decompose the terrain by simply time and amplitude
+        results = resultsmooth + results[-1,:] #recompose the data
 
-        #x = numpy.ravel(results, order='C')
-        x = results[0,:]
-        nz = results[1,:]
-        xr = numpy.add(x,nz)
-        denormalized_d = xr * (np.ptp(self.buffer) - np.min(self.buffer)) + np.min(self.buffer)
+        results1 = (results * (max_d - min_d)) + min_d #denormalize the data
+        self.buffer2[:, 0] = results1
+        self.buffer2[:, 1] = self.buffer[:, 1]
 
-        #self.processedrb.write(self.buffer.astype(dtype=self.dtype), error=True) #UNCOMMENT ALSO PLAY
-        Z, freqs, t = mlab.specgram(denormalized_d, NFFT=256, Fs=44100, detrend=None, window=None, noverlap=223, pad_to=None, scale_by_freq=None, mode="default")
-        NV, freqs, t = mlab.specgram(self.buffer[:, 0], NFFT=256, Fs=44100, detrend=None, window=None, noverlap=223, pad_to=None, scale_by_freq=None, mode="default")
-        XZ = Z + NV
+        Z, freqs, t = mlab.specgram(results1, NFFT=256, Fs=44100, detrend=None, window=None, noverlap=223, pad_to=None, scale_by_freq=None, mode="default")
         ##c = (255*(results - np.min(results))/np.ptp(results)).astype(int)
         #image = c.astype('float64')
         # https://stackoverflow.com/questions/39359693/single-valued-array-to-rgba-array-using-custom-color-map-in-python
-        arr_color = self.SM.to_rgba(NV, bytes=False, norm=True)
-        arr_color = arr_color[:30,:,:]
+        arr_color = self.SM.to_rgba(Z, bytes=False, norm=True)
+        arr_color = arr_color[1:40,-50:,:]
         arr_color = snowy.resize(arr_color, width=60, height=100)
         arr_color = numpy.rot90(arr_color)  # rotate it and jam it in the buffer lengthwise
         self.cleanspecbuf.growing_write(arr_color)
+        self.processedrb.write(self.buffer2.astype(dtype=self.dtype), error=True)
+
         #np.set_printoptions(threshold=np.inf, linewidth=200)
         #self.cleanspecbuf.growing_write(arr_color)
         #with open("ITD.txt", "ab") as f:
@@ -417,7 +791,7 @@ class FilterRun(Thread):
         #for i in range(self.channels):
             # do work on ITD here
         #self.iterations = iterationz
-        #self.processedrb.write(self.buffer2.astype(dtype=self.dtype), error=True)
+        #self.processedrb.write(results1(dtype=self.dtype), error=True)
 
         #Z, freqs, t = mlab.specgram(self.buffer2[:, 0], NFFT=256, Fs=44100, detrend=None, window=None, noverlap=223,
                           #          pad_to=None, scale_by_freq=None, mode="magnitude")
@@ -703,7 +1077,7 @@ changes.
         # filtered = self.rb.read(frame_count)
         # if len(filtered) < frame_count:
         #     filtered = numpy.zeros((frame_count, self.channels), dtype=self.dtype)
-        if True: # len(self.processedrb) < self.processing_size:
+        if len(self.processedrb) < self.processing_size:
             # print('Not enough data to play! Increase the buffer_delay')
             # uncomment this for debug
             audio = numpy.zeros((self.processing_size, self.channels), dtype=self.dtype)
