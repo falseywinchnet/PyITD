@@ -2,6 +2,8 @@
 # Linshan Jia (jialinshan123 at 126) wrote the matlab original code, frei and osorio wrote the original algorithm, and 
 #https://arxiv.org/pdf/1404.3827v1.pdf the authors of this paper wrote an algorithm representation on page 26 which i cant read so i havnt validated
 #Intrinsic Time-Scale Representation Algorithm
+#https://viewer.mathworks.com/?viewer=plain_code&url=https%3A%2F%2Fwww.mathworks.com%2Fmatlabcentral%2Fmlc-downloads%2Fdownloads%2Fbacae6a7-59d2-4ad9-89b8-f4d5dd60f422%2F3d85f570-571f-4e45-8049-b0e10d205469%2Ffiles%2Fitd.m&embed=web
+
 
 import numpy
 import numpy as np
