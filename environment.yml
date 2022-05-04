@@ -1,0 +1,6 @@
+name: ITD
+channels:
+  - conda-forge
+dependencies:
+  - numpy
+  - matplotlib
