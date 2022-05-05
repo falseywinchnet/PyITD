@@ -1,7 +1,4 @@
 # PyITD Intrinsic Time-Scale Decomposition
-
-## Links
-
 ## Introduction
 
 This is a Python implementation of Intrinsic Time-Scale Decomposition (ITD).
