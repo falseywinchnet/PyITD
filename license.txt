@@ -1,0 +1,16 @@
+Copyright (C) 2003-2022 Flint Hills Scientific LLC
+Authors: Chronum94, FalsyWinchnet
+
+Permission is hereby NOT granted to any person obtaining a copy of this software and associated documentation files (the "Software"), 
+to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, 
+and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so.
+
+Provided at the time the patent described in US7966156B1 expires and there are no futher successors describing and holding right to the invention described in US7966156B1,
+or provided at the time there are no further successors, at that time and thereafter, permission is granted to engage in all activities described above
+
+Provided that you are a license holder to the patented invention described in US7966156B1, permission is granted to engage in all activities described above,
+provided that you have license to do so with regards to each activity described.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, 
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, 
+WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
