@@ -4,8 +4,9 @@ Matlab implementation Written by Linshan Jia (jialinshan123@126.com)
 Python implementation of baseline,knot finding by Chronum94, detectpeaks adapted from Marcos Duarte
 https://arxiv.org/pdf/1404.3827v1.pdf
 https://sci-hub.hkvisa.net/10.1098/rspa.2006.1761
-
-algorithm completion status: 99%
+NIH/NINDS grants nos. 1R01NS046602-01 and 1R43NS39240-01.
+algorithm completion status: 100%
+This algorithm is patented US7966156B1 by Frei And Osorio, 2024-10-06 Adjusted expiration
 '''
 import numpy
 import numba
