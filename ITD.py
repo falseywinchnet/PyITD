@@ -151,7 +151,3 @@ def itd_baseline_extract(data: list[numpy.float64]):
     rotation = numpy.subtract(x, baseline_new)
 
     return baseline_new , rotation, 1
-
-
-r =numpy.array([1,2,3,4,5]).astype(dtype=float)
-x = ITD(r)
