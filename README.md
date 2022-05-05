@@ -2,6 +2,9 @@
 ## Introduction
 
 This is a Python implementation of Intrinsic Time-Scale Decomposition (ITD).
+ITD is a patented decomposition method developed under grant.
+NIH/NINDS grants nos. 1R01NS046602-01 and 1R43NS39240-01.
+This algorithm is patented US7966156B1 by Frei And Osorio, 2024-10-06 Adjusted expiration
 
 "We introduce a new algorithm, the intrinsic time-scale decomposition (ITD), for efficient
 and precise time–frequency–energy (TFE) analysis of signals. The ITD method
