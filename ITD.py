@@ -14,11 +14,6 @@ def isin(a, b):
 
 @numba.njit(numba.int64[:](numba.float64[:]))
 def detect_peaks(x: list[float]):
-    """Detect peaks in data based on their amplitude and other features.
-    warning: this code is an optimized copy of the "Marcos Duarte, https://github.com/demotu/BMC"
-    matlab compliant detect peaks function intended for use with data sets that only want
-    rising edge and is optimized for numba. experiment with it at your own peril.
-    """
     # find indexes of all peaks
     x = numpy.asarray(x)
     if len(x) < 3:
@@ -34,7 +29,6 @@ def detect_peaks(x: list[float]):
 
     vil = numpy.zeros(dx.size + 1)
     vil[:-1] = dx[:]# hacky solution because numba does not like hstack tuple arrays
-    #numpy.asarray((dx[:], [0.]))# hacky solution because numba does not like hstack
     vix = numpy.zeros(dx.size + 1)
     vix[1:] = dx[:]
 
@@ -104,7 +98,6 @@ def itd_baseline_extract(data: list[numpy.float64]):
     baseline_knots = numpy.zeros(len(extrema_indices))
     baseline_knots[0] = numpy.mean(x[:2])
     baseline_knots[-1] = numpy.mean(x[-2:])
-    #also reflections possible, but should be treated with caution
 
     #j = extrema_indices, k = k, baseline_knots = B, x =  τ
     for k in range(1, len(extrema_indices) - 1):
@@ -112,18 +105,6 @@ def itd_baseline_extract(data: list[numpy.float64]):
         (extrema_indices[k] - extrema_indices[k - 1]) / (extrema_indices[k + 1] - extrema_indices[k - 1]) * \
         (x[extrema_indices[k + 1]] - x[extrema_indices[k - 1]])) + \
                            alpha * x[extrema_indices[k]]
-    
-    #q * (n + ((x - y)/(z - y)) * (v - n)) + q * o = 9 -> 3 mult, 3 sub, 1 div, 2 add
-    #q * (n + o + ((n - v) * (x - y))/(y - z)) =  8 -> 2 mult, 3 sub, 1 div, 2 add
-    #algebraically, these things dfo the same thing.
-    
-    #for k in range(1, len(extrema_indices) - 1):
-    #        baseline_knots[k] = alpha * (x[extrema_indices[k - 1]] + \
-     #       x[extrema_indices[k]] + (((extrema_indices[k] - extrema_indices[k - 1]) * x[extrema_indices[k + 1]] - x[extrema_indices[k - 1]]) / \
-     #                                (extrema_indices[k + 1] - extrema_indices[k - 1])))
-   
-    #using wolfram alpha and remapping indexes to algebra variables, found a slight improvement saving one instruction.
-    #However, it does not output similar results at all!
     
     baseline_new = numpy.zeros_like(x)
     #baseline = b^j+1, x = bj(previous baseline)
