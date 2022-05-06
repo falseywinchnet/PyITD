@@ -73,23 +73,6 @@ def detect_peaks(x: list[float]):
     
     return numpy.unique(ind)
 
-@numba.jit(numba.float64[:,:](numba.float64[:]))
-def ITD(data: list[numpy.float64]):
-    Lx, Hx, cont = itd_baseline_extract(numpy.transpose(numpy.asarray(data,dtype=numpy.float64)))
-    H = numpy.zeros((22,len(data)),dtype=numpy.float64)
-    H[0,:] = Hx[:]
-    counter = 1
-    while cont:
-        Lx, Hx, cont = itd_baseline_extract(Lx)
-        H[counter,:] = Hx[:]
-        counter = counter + 1
-        if counter > 20:
-            counter = counter - 1 
-            break#we've gone on long enough
-    counter = counter + 1
-    H[counter,:] = Lx[:]
-    return H[0:counter+1,:]
-
 @numba.jit(numba.types.Tuple((numba.float64[:],numba.float64[:],numba.int64))(numba.float64[:]))
 def itd_baseline_extract(data: list[numpy.float64]):
 
@@ -128,16 +111,16 @@ def itd_baseline_extract(data: list[numpy.float64]):
         baseline_knots[k] = alpha * (x[extrema_indices[k - 1]] + \
         (extrema_indices[k] - extrema_indices[k - 1]) / (extrema_indices[k + 1] - extrema_indices[k - 1]) * \
         (x[extrema_indices[k + 1]] - x[extrema_indices[k - 1]])) + \
-                            alpha * x[extrema_indices[k]]
+                           alpha * x[extrema_indices[k]]
     
     #q * (n + ((x - y)/(z - y)) * (v - n)) + q * o = 9 -> 3 mult, 3 sub, 1 div, 2 add
     #q * (n + o + ((n - v) * (x - y))/(y - z)) =  8 -> 2 mult, 3 sub, 1 div, 2 add
-    #algebraically, these things do the same thing.
+    #algebraically, these things dfo the same thing.
     
     #for k in range(1, len(extrema_indices) - 1):
-     #       baseline_knots[k] = alpha * (x[extrema_indices[k - 1]] + \
-      #      x[extrema_indices[k]] + ((extrema_indices[k] - extrema_indices[k - 1]) * x[extrema_indices[k + 1]] - x[extrema_indices[k - 1]]) / \
-       #                              (extrema_indices[k + 1] - extrema_indices[k - 1]))
+    #        baseline_knots[k] = alpha * (x[extrema_indices[k - 1]] + \
+     #       x[extrema_indices[k]] + (((extrema_indices[k] - extrema_indices[k - 1]) * x[extrema_indices[k + 1]] - x[extrema_indices[k - 1]]) / \
+     #                                (extrema_indices[k + 1] - extrema_indices[k - 1])))
    
     #using wolfram alpha and remapping indexes to algebra variables, found a slight improvement saving one instruction.
     #However, it does not output similar results at all!
@@ -152,3 +135,20 @@ def itd_baseline_extract(data: list[numpy.float64]):
     rotation[:] = numpy.subtract(x, baseline_new)
 
     return baseline_new , rotation, 1
+
+@numba.jit(numba.float64[:,:](numba.float64[:]))
+def ITD(data: list[numpy.float64]):
+    Lx, Hx, cont = itd_baseline_extract(numpy.transpose(numpy.asarray(data,dtype=numpy.float64)))
+    H = numpy.zeros((22,len(data)),dtype=numpy.float64)
+    H[0,:] = Hx[:]
+    counter = 1
+    while cont:
+        Lx, Hx, cont = itd_baseline_extract(Lx)
+        H[counter,:] = Hx[:]
+        counter = counter + 1
+        if counter > 20:
+            counter = counter - 1 
+            break#we've gone on long enough
+    counter = counter + 1
+    H[counter,:] = Lx[:]
+    return H[0:counter+1,:]
