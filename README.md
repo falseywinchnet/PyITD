@@ -29,7 +29,7 @@ The baseline B1 is now decomposed in the same fashion, producing a proper rotati
 R2 and a baseline B2 , and so on. The process stops when the resulting baseline has
 only two extrema, or is a constant.
 
-B2 = B1 - R1, and so on. The decomposition mode is reversable with a fairly good degree of precision, -e14 typical.
+B2 = B1 - R1, and so on. The decomposition mode is fully reversable with typically perfect reconstitution.
 The final output for the decomposition is a monotonic upward trend.
 
 ITD avoids a priori assumptions about the content/morphology of the signal
