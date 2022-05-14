@@ -1,7 +1,9 @@
 import pyfftw
 import planfftw
-#warning: the results of this output are not proven in any sense, way, shape, or form.
-#you use this at your own peril.
+import numpy
+#warning: you use the results of the output of this algorithm at your own peril.
+#there has been absolutely no scientific validation of the work or results, unlike EFD(1d).
+#this has been adapted for rectangular inputs of arbitrary dimensions, but the error rate is likely smallest with square inputs.
 
 def segm_tec2d(f,N):
 # 1. detect the local maxima and minina
@@ -26,18 +28,19 @@ def segm_tec2d(f,N):
     locmax[:,0] = f[:,0]
     locmax[-1,:] = f[-1,:]
     locmax[:,-1] = f[:,-1] #establish the framework
-                  
+    X = N             
     if N != 0: #keep the N-th highest maxima and their index
         desc_sort = -numpy.sort(-locmax)#perform a descending sort
         desc_sort_index = locmax.argsort()[::-1]
         
-        if len(desc_sort) > N:
-            desc_sort_index = numpy.sort(desc_sort_index[0:N,0:N])
+        if desc_sort.shape[0] > N or desc_sort.shape[1] > N:
+                desc_sort_index = numpy.sort(desc_sort_index[0:N,0:N])
         else:
             desc_sort_index = numpy.sort(desc_sort_index)
-            N = len(desc_sort)
+            N = desc_sort.shape[0]
+            X = desc_sort.shape[1]
         M = N+1# numbers of the boundaries
-        
+        O = X+1
         omega =  desc_sort_index.copy()
         omega = numpy.insert(omega, 0, 0, axis=0)
         omega = numpy.insert(omega, 0, 0, axis=1)
@@ -45,16 +48,15 @@ def segm_tec2d(f,N):
         omega = numpy.insert(omega, omega.shape[1], f.shape[1], axis=1)
         #elegant way to prepend 0s and append 1s to 2d array    
         
-        bounds = numpy.zeros((M,M))
+        bounds = numpy.zeros((M,O))
         for i in range(M):
-            for j in range(M):
+            for j in range(O):
                 if (i == 0 or i == M) and (omega[i,j] == omega[i+1,j+1]) \
                     and (omega[i,j] == omega[i,j+1]) and (omega[i,j] == omega[i+1,j]) or \
-                    (j == 0 or j == M) and (omega[i,j] == omega[i+1,j+1]) \
+                    (j == 0 or j == O) and (omega[i,j] == omega[i+1,j+1]) \
                     and (omega[i,j] == omega[i,j+1]) and (omega[i,j] == omega[i+1,j]):
                     bounds[i,j] = omega[i,j]-1
                 else:
-                    #what do we do about 
                     ind = numpy.argmin(f[omega[i:i+1,j:j+1]])
                     bounds[i,j] = omega[i,j]+ind-2;
         cerf = desc_sort_index*numpy.pi/round(len(f))
@@ -77,35 +79,33 @@ def EFD2d(x: list[numpy.float64], N: int):
     bounds =  numpy.insert(bounds, 0, 0, axis=0)
     bounds =  numpy.insert(bounds, 0, 0, axis=1)#prepend zeros
     # truncate the boundaries to [0,pi]
-    bounds = bounds*numpy.pi/round(ff[0,:].size/2)
+    bounds = bounds*numpy.pi/round(((ff.shape[0] + ff.shape[1])/2)/2)
     
     
     # extend the signal by miroring to deal with the boundaries
-    l = round(x[0,:].size/2)
+    l = round( x.shape[0]/2)
+    r = round( x.shape[1]/2)
     #x = [x(l-1:-1:1);x;x(end:-1:end-l+1)];
     
     z = x.copy()
-    z = numpy.lib.pad(z,((l,l),(l,l)),'reflect') 
+    z = numpy.lib.pad(z,((l,l),(r,r)),'symmetric') 
 
     
     fr =  planfftw.fftn(z)
     ff = fr(z)
 
     # obtain the boundaries in the extend f
-    bound2 = numpy.ceil(bounds*round(ff[0,:].size/2)/numpy.pi).astype(dtype=int)  
-    
-    efd = numpy.zeros(((bound2[0,:].size-1,bound2[:,0].size-1, x[0,:].size, x[:,0].size)),dtype=numpy.float64)
+    bound2 = numpy.ceil(bounds*round(((ff.shape[0] + ff.shape[1])/2) /2)/numpy.pi).astype(dtype=int)
+    #bound2 = numpy.concatenate((bound2,[8000]))    
+    efd = numpy.zeros(((bound2.shape[0]-1,bound2.shape[1]-1, x.shape[0], x.shape[1])),dtype=numpy.float64)
     #generalize EFD to a 3d vector constrained by K?
     
-    ft = numpy.zeros((bound2[0,:].size-1,bound2[:,0].size-1,ff[0,:].size,ff[:,0].size),dtype=numpy.cdouble)
+    ft = numpy.zeros((bound2.shape[0]-1,bound2.shape[1]-1,ff.shape[0],ff.shape[1]),dtype=numpy.cdouble)
+    rd = ft[0,0,:,:]
+    fz =  planfftw.ifftn(rd)
     
-    fz =  planfftw.ifftn(ft[0,0,:,:]) 
-    
-    
-    
-    
-    for k in range(bound2[0,:].size-1): 
-        for j in range(bound2[:,0].size-1):
+    for k in range(bound2.shape[0]-1): 
+        for j in range(bound2.shape[1]-1):
             if bound2[k,j] == 0:
                 ft[k,j,0:bound2[k+1,j+1]] = ff[0:bound2[k+1,j+1]]
                 ft[k,j,ff[0,:].size+2-bound2[k+1,j+1]:len(ff)] = ff[ff[0,:].size +2-bound2[k+1,j+1]:ff[0,:].size]
@@ -114,7 +114,7 @@ def EFD2d(x: list[numpy.float64], N: int):
                 ft[k,j,ff[0,:].size+2-bound2[k+1,j+1]:ff[0,:].size+2-bound2[k,j]]\
                 = ff[ff[0,:].size+2-bound2[k+1,j+1]:ff[0,:].size+2-bound2[k,j]]
             rx = numpy.real(fz(ft[k,j,:,:]))
-            efd[k,j,:,:] = rx[l:-l,l:-l]
+            efd[k,j,:,:] = rx[l:-l,r:-r]
 
 
     return efd,cerf,bounds
