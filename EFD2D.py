@@ -85,7 +85,7 @@ def EFD2d(x: list[numpy.float64], N: int):
     #x = [x(l-1:-1:1);x;x(end:-1:end-l+1)];
     
     z = x.copy()
-    z = numpy.lib.pad(z,((l,l),(l,l)),'symmetric') #not sure if should use 'reflect' instead
+    z = numpy.lib.pad(z,((l,l),(l,l)),'reflect') 
 
     
     fr =  planfftw.fftn(z)
