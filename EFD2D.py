@@ -8,8 +8,9 @@ import numpy
 def segm_tec2d(f,N):
 # 1. detect the local maxima and minina
     locmax = numpy.zeros_like(f)
-    locmin = numpy.ones_like(f)
-    locmin = locmin * numpy.max(f)
+   # locmin = numpy.ones_like(f)
+   # locmin = locmin * numpy.max(f)
+    
     for i in range(1,f.shape[0]-1):#iterate over columns 
         for j in range(1,f.shape[1]-1): #iterate over rows
             if (f[i-1,j-1] < f[i,j]) and (f[i,j]>f[i+1,j+1]) and \
@@ -18,12 +19,12 @@ def segm_tec2d(f,N):
                 (f[i+1,j-1] < f[i,j]) and (f[i,j] >f[i+1,j-1]) and \
                 (f[i-1,j+1] < f[i,j]): #consider all 9 neighbors
                 locmax[i,j]=f[i,j]  
-            #if (f[i-1,j-1] > f[i,j]) and (f[i,j] < f[i+1,j+1]) and \
-            # (f[i-1,j] > f[i,j]) and (f[i,j] < f[i+1,j]) and \
+          #  if (f[i-1,j-1] > f[i,j]) and (f[i,j] < f[i+1,j+1]) and \
+           #  (f[i-1,j] > f[i,j]) and (f[i,j] < f[i+1,j]) and \
             # (f[i,j-1] > f[i,j]) and (f[i,j] < f[i,j+1]) and \
-            #    (f[i+1,j-1] > f[i,j]) and (f[i,j]< f[i+1,j-1]) and \
-            #    (f[i-1,j+1] > f[i,j]): #consider all 9 neighbors
-            #    locmin[i,j]=f[i,j] # This equation is not used?
+             #   (f[i+1,j-1] > f[i,j]) and (f[i,j]< f[i+1,j-1]) and \
+              #  (f[i-1,j+1] > f[i,j]): #consider all 9 neighbors
+               # locmin[i,j]=f[i,j] # This equation is not used?
     locmax[0,:] = f[0,:]
     locmax[:,0] = f[:,0]
     locmax[-1,:] = f[-1,:]
@@ -32,9 +33,8 @@ def segm_tec2d(f,N):
     if N != 0: #keep the N-th highest maxima and their index
         desc_sort = -numpy.sort(-locmax)#perform a descending sort
         desc_sort_index = locmax.argsort()[::-1]
-        
         if desc_sort.shape[0] > N or desc_sort.shape[1] > N:
-                desc_sort_index = numpy.sort(desc_sort_index[0:N,0:N])
+                desc_sort_index = numpy.sort(desc_sort_index[0:N])
         else:
             desc_sort_index = numpy.sort(desc_sort_index)
             N = desc_sort.shape[0]
@@ -49,12 +49,13 @@ def segm_tec2d(f,N):
         #elegant way to prepend 0s and append 1s to 2d array    
         
         bounds = numpy.zeros((M,O))
+
         for i in range(M):
             for j in range(O):
-                if (i == 0 or i == M) and (omega[i,j] == omega[i+1,j+1]) \
-                    and (omega[i,j] == omega[i,j+1]) and (omega[i,j] == omega[i+1,j]) or \
-                    (j == 0 or j == O) and (omega[i,j] == omega[i+1,j+1]) \
-                    and (omega[i,j] == omega[i,j+1]) and (omega[i,j] == omega[i+1,j]):
+                if ((i == 0 or i == M) and (omega[i,j] == omega[i+1,j+1]) \
+                    and (omega[i,j] == omega[i,j+1]) and (omega[i,j] == omega[i+1,j])) or \
+                    ((j == 0 or j == O) and (omega[i,j] == omega[i+1,j+1]) \
+                    and (omega[i,j] == omega[i,j+1]) and (omega[i,j] == omega[i+1,j])):
                     bounds[i,j] = omega[i,j]-1
                 else:
                     ind = numpy.argmin(f[omega[i:i+1,j:j+1]])
