@@ -4,9 +4,25 @@ import numpy as np
 import scipy.interpolate as interpolate
 from math import factorial
 
+"""
+MEITD is a non-parametric trend extraction reduction technique based on 
+Intrinsic Time-Scale Decomposition, the use of this method for non-research purposes
+may be restricted by law due to patent rights on the original ITD algorithm. 
+MEITD, Maximal Extraction ensemble Intrinsic-Time-Scale Decomposition
+iteratively selects and extracts proper rotations meeting Weighed Permutation Entropy
+and seeks to extract a maximum number of components, to leave noise in a residual trend.
+The implementation itself is released under the MIT and FSF licenses.
+
+Copyright (C) 2007 Free Software Foundation, Inc. <https://fsf.org/>
+Everyone is permitted to copy and distribute verbatim copies
+of this license document, but changing it is not allowed.
+"""
 
 
-
+#I present Maximal Extraction Intrinsic Time-Scale Decomposition.
+#This model is intended to perform maximum extractions, and then sort
+#the output by entropy. Noise is generally the very last item-
+#the trends from 0:-1 are increasing entropy and frequency.
 
 
 
@@ -30,54 +46,6 @@ from math import factorial
 # https://sci-hub.hkvisa.net/10.1016/j.renene.2015.04.063#
 # https://sci-hub.hkvisa.net/10.1007/s00034-019-01069-2
 #
-
-# recommendations to improve ITD are also implemented here. In particular:
-# mirroring? I think i'm doing it right? extrema
-# cubic spline interpolation instead of affine smoothing transformation for baseline interpolation
-# akima interpolation also gave interesting results, more like affine, perhaps better
-# RMS of PRC calculations
-# if i understand the paper correctly, omega = the square root of the mean square of ( current rotation - the RMS of the signal)
-# the omega for each should be stored, and then the coefficients with the highest omega selected.
-# if i understand right, also, a variable is set, let's say b, value not given in the paper
-# and then the sum of the rotation is taken. when the sum of 0.005 * the rotation  < b < the sum of 0.05* the rotation,
-# the EITD authors considered it decomposed.  #it's also possible to determine how 'proper" a rotation is by orthonormality.
-
-# Adaptive carrier fringe pattern enhancement for
-# wavelet transform profilometry through modifying
-# intrinsic time-scale decomposition
-# Hanxiao Wang,1 Yinghao Miao,1 Hailu Yang,1 Zhoujing Ye,1 AND Linbing Wang2,3,
-# proposed MITD in 2020:
-# MITD proposes adding white noise with the same deviation but opposite polarity to two copies of S.
-# this can be futher increased to multiple pairs.
-# each modified signal copy is decomposed using cubic interpolation(as we have here)
-# where each of the PRC's are added together with their opposite twin, same for the residual.
-# in the case of an ITD instance generating MORE PRC's than the other, MITD proposes padding with PRC's of 0s to reach
-# equal copy counts.
-# In theory, this could be applied to EITD.
-# the decomposition is quite clean and looks good, and doesn't add a huge amount of overhead.
-# The reconstruction error is < 10-16 which is as good as numpy.sum can resolve or better.
-
-# then, MITD proposes WPE measurement and selection of PRC based on WPE, with low WPE = less likely to be noise.
-# EITD proposed measuring omega and selecting for high omega.
-# EITD-MP proposes matching persuit with binary search.
-
-# then, MITD proposes grey correlation and fuzzy similarity.
-# EITD proposes wavelet transforms.
-
-# ITD -> Selection -> Transform/Correlate -> extract
-
-# WPE = weighted-permutation entropy. it is implemented here copied from pyEntropy
-# it can be used with weighted_permutation_entropy(x), assuming MITD authors didn't intend a different kind of entropy.
-# they measure it between 0 and 1 in most cases, which may mean that the normalization=True must be enabled.
-# noise is considered to be WPE above 0.6.
-# https://github.com/rsarai/grey-relational-analysis/blob/master/Gait%20and%20Grey%20Methods.ipynb its possible
-# that some of te code here could be used to implement the grey fuzzy analysis
-
-
-# all summed up, here in this `paper` i propose to implement MEITD:
-# modified Ensemble Intrinsic Decomposition, where each time a rotation is to be repeatedly decomposed,
-# we add noise to it before decomposing and perform the paired decomposition.
-# this is only a theoretical possibility atm.
 
 
 def _embed(x, order=3, delay=1):
@@ -356,7 +324,7 @@ def baseline_knot_estimation(baseline_knots: list[numpy.float64], x: list[numpy.
                                      * (x[extrema_indices[k + 1]] - x[extrema_indices[k - 1]])) \
                             + (alpha * x[extrema_indices[k]])
 
-    return baseline_knots[:]
+    return baseline_knots
 
 
 
@@ -366,8 +334,8 @@ def itd_baseline_extract(data: list[numpy.float64]) -> [numpy.ndarray, numpy.nda
     rotation = numpy.zeros_like(x)
     baseline_new = numpy.zeros_like(x)
 
-    idx_max = numpy.asarray(detect_peaks(x))
-    idx_min = numpy.asarray(detect_peaks(-x))
+    idx_max = numpy.asarray(matlab_detect_peaks(x))
+    idx_min = numpy.asarray(matlab_detect_peaks(-x))
 
     num_extrema = idx_min.size + idx_max.size
     #if num_extrema < 5:
@@ -402,26 +370,25 @@ import math
 
 def retrieve_proper_rotation(x: numpy.ndarray):
     x = numpy.asarray(x).astype(dtype=numpy.float64)
+    WPE = weighted_permutation_entropy(x, order=3, normalize=True)
+    WPESUM = numpy.mean(WPE)
     rotation_ = numpy.zeros((len(x)), dtype=numpy.float64)
     baseline_ = numpy.zeros((len(x)), dtype=numpy.float64)
     beta = math.fsum(x)
-    idx_max = numpy.asarray(matlab_detect_peaks(x))
-    idx_min = numpy.asarray(matlab_detect_peaks(-x))
+    idx_max = numpy.asarray(detect_peaks(x))
+    idx_min = numpy.asarray(detect_peaks(-x))
     num_extrema = idx_min.size + idx_max.size
-    baseline_[:] = x[:] #we start with the rotation and we take it from there
+    baseline_[:] = x.copy() #we start with the rotation and we take it from there
     if num_extrema < 5:
-        print("I can't decompose this!")
+        print("I can't retrieve a proper rotation")
         return x, 0
     else:
         while num_extrema > 5:
             rotation_[:], baseline_[:] = itd_baseline_extract(baseline_[:])
-            L = abs(math.fsum(rotation_) * 0.005)
-            R = abs(math.fsum(rotation_) * 0.05)
             idx_max = numpy.asarray(detect_peaks(baseline_[:]))
             idx_min = numpy.asarray(detect_peaks(-baseline_))
             num_extrema = idx_min.size + idx_max.size
-            beta = 0.01
-            if L < beta and beta < R:
+            if WPESUM < 0.7 and not WPESUM < 0.2 : # criteria
                 return rotation_[:], 1
         # iteratively and repeatedly decompose this mode until a proper rotation is found-
         # ideally, the first proper rotation!
@@ -430,22 +397,23 @@ def retrieve_proper_rotation(x: numpy.ndarray):
 
 def determine_if_first_is_proper_rotation(x: numpy.ndarray):
     x = numpy.asarray(x).astype(dtype=numpy.float64)
+    WPE = weighted_permutation_entropy(x, order=3, normalize=True)
+    WPESUM = numpy.mean(WPE)
     rotation_ = numpy.zeros((len(x)), dtype=numpy.float64)
     baseline_ = numpy.zeros((len(x)), dtype=numpy.float64)
-    idx_max = numpy.asarray(matlab_detect_peaks(x))
-    idx_min = numpy.asarray(matlab_detect_peaks(-x))
+    idx_max = numpy.asarray(detect_peaks(x))
+    idx_min = numpy.asarray(detect_peaks(-x))
     num_extrema = idx_min.size + idx_max.size
     if num_extrema < 5:
+        print("I can't retrieve any rotation")
+
         return x , rotation_ , 0
     else:
         rotation_[:], baseline_[:] = itd_baseline_extract(x[:])
-        L = abs(math.fsum(rotation_) * 0.005)
-        R = abs(math.fsum(rotation_) * 0.05)
-        idx_max = numpy.asarray(matlab_detect_peaks(baseline_[:]))
-        idx_min = numpy.asarray(matlab_detect_peaks(-baseline_))
+        idx_max = numpy.asarray(detect_peaks(baseline_[:]))
+        idx_min = numpy.asarray(detect_peaks(-baseline_))
         num_extrema = idx_min.size + idx_max.size
-        beta = 0.01
-        if L < beta and beta < R:
+        if WPESUM < 0.7 and not WPESUM < 0.2: # criteria
             return rotation_[:], baseline_[:], 1
         else:
             return rotation_[:], baseline_[:], 0
@@ -466,8 +434,8 @@ def MEITD(data: numpy.ndarray, max_iteration: int = 22) -> numpy.ndarray:
     xchanged = 0
     HILO = 1
     soft_reset = 1
-    idx_max = numpy.asarray(matlab_detect_peaks(x))
-    idx_min = numpy.asarray(matlab_detect_peaks(-x))
+    idx_max = numpy.asarray(detect_peaks(x))
+    idx_min = numpy.asarray(detect_peaks(-x))
     num_extrema = idx_min.size + idx_max.size
     if num_extrema < 4:
         return zero_sum , zero_sum , x
@@ -498,11 +466,11 @@ def MEITD(data: numpy.ndarray, max_iteration: int = 22) -> numpy.ndarray:
             if proper_rotation == 1:
                 # so, we either got lucky on our first try, or we retrieved a proper rotation just now.
                 if HILO == 1:
-                    highrotations[highcounter, :] = rotation_[:]
+                    highrotations[highcounter, :] = rotation_.copy()
                     highcounter = highcounter + 1
                     # if HILO is 1, we have decomposed a higher end rotation.
                 else:
-                    lowrotations[lowcounter, :] = rotation_[:]
+                    lowrotations[lowcounter, :] = rotation_.copy()
                     lowcounter = lowcounter + 1
 
                     # if hilo is 0, we have decomposed a lower end rotation.
@@ -513,8 +481,8 @@ def MEITD(data: numpy.ndarray, max_iteration: int = 22) -> numpy.ndarray:
                 xchanged = 1
 
             if xchanged == 1 and HILO == 1:
-                idx_max = numpy.asarray(matlab_detect_peaks(x))
-                idx_min = numpy.asarray(matlab_detect_peaks(-x))
+                idx_max = numpy.asarray(detect_peaks(x))
+                idx_min = numpy.asarray(detect_peaks(-x))
                 num_extrema = idx_min.size + idx_max.size
                 if num_extrema < 5:
                     continue #break here if we can't decompose
@@ -540,8 +508,8 @@ def MEITD(data: numpy.ndarray, max_iteration: int = 22) -> numpy.ndarray:
             if xchanged == 1 and HILO == 0:
                 # we successfully decomposed a lower frequency component.
                 # let 's go back again and attempt a high frequency decomposition.
-                idx_max = numpy.asarray(matlab_detect_peaks(x))
-                idx_min = numpy.asarray(matlab_detect_peaks(-x))
+                idx_max = numpy.asarray(detect_peaks(x))
+                idx_min = numpy.asarray(detect_peaks(-x))
                 num_extrema = idx_min.size + idx_max.size
                 if num_extrema < 5:
                     continue  # break here if we can't decompose
@@ -558,15 +526,15 @@ def MEITD(data: numpy.ndarray, max_iteration: int = 22) -> numpy.ndarray:
                 if soft_reset == 0:
                     rotation_[:], baseline_[:]  = itd_baseline_extract(x)
                     soft_reset = 1
-                idx_max = numpy.asarray(matlab_detect_peaks(baseline_))
-                idx_min = numpy.asarray(matlab_detect_peaks(-baseline_))
+                idx_max = numpy.asarray(detect_peaks(baseline_))
+                idx_min = numpy.asarray(detect_peaks(-baseline_))
                 num_extrema = idx_min.size + idx_max.size
                 if num_extrema < 5:
                     continue #break here if we can't go any further
                 for each in range(soft_reset):
                     rotation_[:], baseline_[:]  = itd_baseline_extract(baseline_[:])
-                    idx_max = numpy.asarray(matlab_detect_peaks(baseline_))
-                    idx_min = numpy.asarray(matlab_detect_peaks(-baseline_))
+                    idx_max = numpy.asarray(detect_peaks(baseline_))
+                    idx_min = numpy.asarray(detect_peaks(-baseline_))
                     num_extrema = idx_min.size + idx_max.size
                     if num_extrema < 5:
                         break #break here if we can't go any further
@@ -593,85 +561,22 @@ def MEITD(data: numpy.ndarray, max_iteration: int = 22) -> numpy.ndarray:
     return highrotations[0:highcounter, :],  lowrotations[0:lowcounter, :], x[:]
 
 def XITD(data: numpy.ndarray):
-    highrotations = numpy.zeros((40,45, len(data)), dtype=numpy.float64)
-    highcounter = 0
-    lowrotations = numpy.zeros((40,45, len(data)), dtype=numpy.float64)
-    lowcounter = 0
-    residual = numpy.zeros((len(data)), dtype=numpy.float64)
-    highrotations_, lowrotations_ , residual_ = MEITD(data)
-    xww = 0 
-    highrotations[0,0:highrotations_.shape[0],:] = highrotations_[:]
-    lowrotations[0,0:lowrotations_.shape[0],:] = lowrotations_[:]
-    residual[:] = residual_[:]
-    counter = 0
-    iteration = 0
-    not_finished = 1
-    while not_finished == 1:
-        not_finished = 0
-        if (highrotations_.shape[0] > 2):
-            for each in range(highrotations_.shape[0]):
-                highrotationsx_, lowrotationsx_ , residualx_ = MEITD(highrotations_[each,:])
-                #we were able to decompose it further. even more further!
-                if (highrotationsx_.shape[0] + lowrotationsx_.shape[0]) > 1:
-                    highrotations[iteration,each,:] = 0 #wipe the data
-                    counter = counter + 1
-                    highrotations[counter,0:highrotationsx_.shape[0],:] = highrotationsx_[:]
-                    lowrotations[counter,0:lowrotationsx_.shape[0],:] = lowrotationsx_[:]
-                    residual[:] = residual[:]  + residualx_[:]
-        if (lowrotations_.shape[0] > 2):
-            for each in range(lowrotations_.shape[0]):
-                highrotationsx_, lowrotationsx_ , residualx_ = MEITD(lowrotations_[each,:])
-                #we were able to decompose it further. even more further!
-                if (highrotationsx_.shape[0] + lowrotationsx_.shape[0]) > 1:
-                    lowrotations[iteration,each,:] = 0 #wipe the data
-
-                    counter = counter + 1
-                    #not_finished == 1
-                    highrotations[counter,0:highrotationsx_.shape[0],:] = highrotationsx_[:]
-                    lowrotations[counter,0:lowrotationsx_.shape[0],:] = lowrotationsx_[:]
-                    residual[:] = residual[:]  + residualx_[:]        
-        highrotations_, lowrotations_ , residual_ =    MEITD(residual[:])  
-        
-        q = highrotations_.shape[0] + lowrotations_.shape[0]
-        
-        if (highrotations_.shape[0] + lowrotations_.shape[0]) > 2: 
-            not_finished = 1
-            iteration = counter +1 #store the results in iteration
-            counter = iteration + 1
-            highrotations[iteration,0:highrotations_.shape[0],:] = highrotations_[:]
-            lowrotations[iteration,0:lowrotations_.shape[0],:] = lowrotations_[:]
-            residual[:] = residual_[:] #reset the residual trend
-        if q == xww:
-            not_finished = 0
-            print("finished!")
-        xww = q
-        
-        
+    data = data.astype(dtype=numpy.float64)
+    highrotations, lowrotations , residual = MEITD(data)
+            
     
-    highrotations = highrotations.reshape((-1, 8000))
     highrotations = highrotations[np.all(highrotations!=0, axis=1)]#take only the rows which are nonzero
     highrotations = numpy.unique(highrotations,axis=0)
 
     
-    lowrotations = lowrotations.reshape((-1, 8000)) 
     lowrotations = lowrotations[np.all(lowrotations!=0, axis=1)]
     lowrotations = numpy.unique(lowrotations,axis=0)
     
     rotations = numpy.vstack((highrotations,lowrotations))
+    rotations = numpy.vstack((rotations,residual))
     ent = []
     for i in range(rotations.shape[0]):
         ent.append(weighted_permutation_entropy(rotations[i,:], order=3, normalize=True))
     rotations = rotations[np.argsort(ent), :]
-    
-    rotations = numpy.vstack((rotations,residual))
-    #rotations = rotations[np.all(rotations!=0, axis=1)]#take only the rows which are nonzero
-    #rotations = numpy.unique(rotations,axis=0)
-
-
-    #rotations = numpy.zeros(((highrotations.shape[0]+lowrotations.shape[0]+1,residual_.shape[0])),dtype=numpy.float64)
-    #rotations[0:highrotations.shape[0],:]= highrotations[:]
-    #rotations[highrotations.shape[0]:-1,:]= lowrotations[:]
-    #rotations[-1,:] = residual[:]
-    #rotations = numpy.unique(rotations,axis=0)
     return rotations
         
