@@ -4,7 +4,7 @@ import pyfftw
 import planfftw
 import numpy as np
 
-# copied from the matlab by falsy winchnet and wealthybanker57
+# copied from the matlab by falsy winchnet.
 # Emperical Fourier Decomposition technique
 # uses fftw, pyfftw, planfftw for fast and easy precise decomp accuracy ~1.0-14 error
 # which is around the precision FFT is capable of
