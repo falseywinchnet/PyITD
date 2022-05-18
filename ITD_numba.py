@@ -32,7 +32,7 @@ def detect_peaks(x: list[float]):
     vix = numpy.zeros(dx.size + 1)
     vix[1:] = dx[:]
 
-    ind = numpy.unique(numpy.where((vil <= 0) & (vix > 0))[0])
+    ind = numpy.unique(numpy.where((vil > 0) & (vix <= 0))[0])
 
             
     rx = numpy.append(dx,[dx[-1] + 1])
