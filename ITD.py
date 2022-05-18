@@ -56,22 +56,8 @@ def detect_peaks(x: list[float]):
     vix = numpy.zeros(dx.size + 1)
     vix[1:] = dx[:]
 
-    ind = numpy.unique(numpy.where((vil <= 0) & (vix > 0))[0])
+    ind = numpy.unique(numpy.where((vil > 0) & (vix <= 0))[0])
 
-            
-    rx = numpy.append(dx,[dx[-1] + 1])
-    arr_diff = numpy.diff(rx)
-    res_mask = arr_diff == 0
-    arr_diff_zero_right = numpy.nonzero(res_mask)[0] + 1
-    res_mask[arr_diff_zero_right] = True
-    repeating = numpy.nonzero(res_mask)[0]
-    rset = set(repeating)
-    if len(repeating)!= 0: #if there are repeating elements:
-        for each in range(len(ind)):
-            if ind[each] in rset: #is this a repeating index?
-                ind[each] = numpy.argmax(dx[ind[each]:] != dx[ind[each]]) -1 #if so, set it to the rightmost value.
-    #this adjustment is intended to implement "rightmost value of flat peaks" efficiently.    
-    #https://arxiv.org/pdf/1404.3827v1.pdf page 3 - always take right-most sample
         
     # handle NaN's
     # NaN's and values close to NaN's cannot be peaks
