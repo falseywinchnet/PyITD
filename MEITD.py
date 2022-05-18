@@ -368,7 +368,7 @@ def itd_baseline_extract(data: list[numpy.float64]) -> [numpy.ndarray, numpy.nda
 import math
 
 
-def retrieve_proper_rotation(x: numpy.ndarray):
+def retrieve_proper_rotation(x: numpy.ndarray,WPEMAX):
     x = numpy.asarray(x).astype(dtype=numpy.float64)
     WPE = weighted_permutation_entropy(x, order=3, normalize=True)
     WPESUM = numpy.mean(WPE)
@@ -385,24 +385,24 @@ def retrieve_proper_rotation(x: numpy.ndarray):
     else:
         while num_extrema > 5:
             rotation_[:], baseline_[:] = itd_baseline_extract(baseline_[:])
-            idx_max = numpy.asarray(detect_peaks(baseline_[:]))
-            idx_min = numpy.asarray(detect_peaks(-baseline_))
+            idx_max = numpy.asarray(matlab_detect_peaks(baseline_[:]))
+            idx_min = numpy.asarray(matlab_detect_peaks(-baseline_))
             num_extrema = idx_min.size + idx_max.size
-            if WPESUM < 0.7 and not WPESUM < 0.2 : # criteria
+            if WPESUM < WPEMAX and not WPESUM < 0.2 : # criteria
                 return rotation_[:], 1
         # iteratively and repeatedly decompose this mode until a proper rotation is found-
         # ideally, the first proper rotation!
         return x, 0
 
 
-def determine_if_first_is_proper_rotation(x: numpy.ndarray):
+def determine_if_first_is_proper_rotation(x: numpy.ndarray,WPEMAX):
     x = numpy.asarray(x).astype(dtype=numpy.float64)
     WPE = weighted_permutation_entropy(x, order=3, normalize=True)
     WPESUM = numpy.mean(WPE)
     rotation_ = numpy.zeros((len(x)), dtype=numpy.float64)
     baseline_ = numpy.zeros((len(x)), dtype=numpy.float64)
-    idx_max = numpy.asarray(detect_peaks(x))
-    idx_min = numpy.asarray(detect_peaks(-x))
+    idx_max = numpy.asarray(matlab_detect_peaks(x))
+    idx_min = numpy.asarray(matlab_detect_peaks(-x))
     num_extrema = idx_min.size + idx_max.size
     if num_extrema < 5:
         print("I can't retrieve any rotation")
@@ -410,27 +410,27 @@ def determine_if_first_is_proper_rotation(x: numpy.ndarray):
         return x , rotation_ , 0
     else:
         rotation_[:], baseline_[:] = itd_baseline_extract(x[:])
-        idx_max = numpy.asarray(detect_peaks(baseline_[:]))
-        idx_min = numpy.asarray(detect_peaks(-baseline_))
+        idx_max = numpy.asarray(matlab_detect_peaks(baseline_[:]))
+        idx_min = numpy.asarray(matlab_detect_peaks(-baseline_))
         num_extrema = idx_min.size + idx_max.size
-        if WPESUM < 0.7 and not WPESUM < 0.2: # criteria
+        if WPESUM < WPEMAX and not WPESUM < 0.2: # criteria
             return rotation_[:], baseline_[:], 1
         else:
             return rotation_[:], baseline_[:], 0
     # decompose rotations from signal evaluating decompositional potential
 
-def MEITD(data: numpy.ndarray, max_iteration: int = 22) -> numpy.ndarray:
+def MEITD(data: numpy.ndarray, max_iteration: int = 40,WPEMAX: float = 0.6) -> numpy.ndarray:
     x = numpy.asarray(data).astype(dtype=numpy.float64)
-    highrotations = numpy.zeros((22, len(data)), dtype=numpy.float64)
-    lowrotations = numpy.zeros((22, len(data)), dtype=numpy.float64)
+    highrotations = numpy.zeros((44, len(data)), dtype=numpy.float64)
+    lowrotations = numpy.zeros((44, len(data)), dtype=numpy.float64)
     highcounter = 0
     lowcounter = 0
     zero_sum = numpy.zeros((len(data)), dtype=numpy.float64)
 
-    rotations = numpy.zeros((45, len(data)), dtype=numpy.float64)
+    rotations = numpy.zeros((85, len(data)), dtype=numpy.float64)
     rotation_ = numpy.zeros((len(data)), dtype=numpy.float64)
     baseline_ = numpy.zeros((len(data)), dtype=numpy.float64)
-    rotation_[:], baseline_[:], proper_rotation = determine_if_first_is_proper_rotation(x)
+    rotation_[:], baseline_[:], proper_rotation = determine_if_first_is_proper_rotation(x,WPEMAX)
     xchanged = 0
     HILO = 1
     soft_reset = 1
@@ -461,7 +461,7 @@ def MEITD(data: numpy.ndarray, max_iteration: int = 22) -> numpy.ndarray:
 
             if proper_rotation == 0:
                 # So, the first rotation wasn't proper, but it's decomposable. Let's decompose it further.
-                rotation_[:], proper_rotation = retrieve_proper_rotation(rotation_[:])
+                rotation_[:], proper_rotation = retrieve_proper_rotation(rotation_[:],WPEMAX)
 
             if proper_rotation == 1:
                 # so, we either got lucky on our first try, or we retrieved a proper rotation just now.
@@ -481,13 +481,13 @@ def MEITD(data: numpy.ndarray, max_iteration: int = 22) -> numpy.ndarray:
                 xchanged = 1
 
             if xchanged == 1 and HILO == 1:
-                idx_max = numpy.asarray(detect_peaks(x))
-                idx_min = numpy.asarray(detect_peaks(-x))
+                idx_max = numpy.asarray(matlab_detect_peaks(x))
+                idx_min = numpy.asarray(matlab_detect_peaks(-x))
                 num_extrema = idx_min.size + idx_max.size
                 if num_extrema < 5:
                     continue #break here if we can't decompose
                 lol, baseline_[:]  = itd_baseline_extract(x)
-                rotation_[:], rt, proper_rotation = determine_if_first_is_proper_rotation(baseline_[:])
+                rotation_[:], rt, proper_rotation = determine_if_first_is_proper_rotation(baseline_[:],WPEMAX)
                 xchanged = 0  # reset the variable after rebasing
                 HILO = 0
                 #zt, rt, lol = we want to TOSS these values.
@@ -501,19 +501,19 @@ def MEITD(data: numpy.ndarray, max_iteration: int = 22) -> numpy.ndarray:
             elif HILO == 1:
                 # we didn't successfully decompose a component, so let's not waste effort.
                 #the first time this runs, any time this runs, it will skip the rebase
-                rotation_[:],cr, proper_rotation = determine_if_first_is_proper_rotation(baseline_[:])
+                rotation_[:],cr, proper_rotation = determine_if_first_is_proper_rotation(baseline_[:],WPEMAX)
                 HILO = 0
                 continue #go back to the top and reset
 
             if xchanged == 1 and HILO == 0:
                 # we successfully decomposed a lower frequency component.
                 # let 's go back again and attempt a high frequency decomposition.
-                idx_max = numpy.asarray(detect_peaks(x))
-                idx_min = numpy.asarray(detect_peaks(-x))
+                idx_max = numpy.asarray(matlab_detect_peaks(x))
+                idx_min = numpy.asarray(matlab_detect_peaks(-x))
                 num_extrema = idx_min.size + idx_max.size
                 if num_extrema < 5:
                     continue  # break here if we can't decompose
-                rotation_[:], baseline_[:], proper_rotation = determine_if_first_is_proper_rotation(x)
+                rotation_[:], baseline_[:], proper_rotation = determine_if_first_is_proper_rotation(x,WPEMAX)
                 xchanged = 0  # reset the variable after rebasing
                 HILO = 1
                 continue
@@ -526,15 +526,15 @@ def MEITD(data: numpy.ndarray, max_iteration: int = 22) -> numpy.ndarray:
                 if soft_reset == 0:
                     rotation_[:], baseline_[:]  = itd_baseline_extract(x)
                     soft_reset = 1
-                idx_max = numpy.asarray(detect_peaks(baseline_))
-                idx_min = numpy.asarray(detect_peaks(-baseline_))
+                idx_max = numpy.asarray(matlab_detect_peaks(baseline_))
+                idx_min = numpy.asarray(matlab_detect_peaks(-baseline_))
                 num_extrema = idx_min.size + idx_max.size
                 if num_extrema < 5:
                     continue #break here if we can't go any further
                 for each in range(soft_reset):
                     rotation_[:], baseline_[:]  = itd_baseline_extract(baseline_[:])
-                    idx_max = numpy.asarray(detect_peaks(baseline_))
-                    idx_min = numpy.asarray(detect_peaks(-baseline_))
+                    idx_max = numpy.asarray(matlab_detect_peaks(baseline_))
+                    idx_min = numpy.asarray(matlab_detect_peaks(-baseline_))
                     num_extrema = idx_min.size + idx_max.size
                     if num_extrema < 5:
                         break #break here if we can't go any further
@@ -562,7 +562,11 @@ def MEITD(data: numpy.ndarray, max_iteration: int = 22) -> numpy.ndarray:
 
 def XITD(data: numpy.ndarray):
     data = data.astype(dtype=numpy.float64)
-    highrotations, lowrotations , residual = MEITD(data)
+    m_ = data.mean(axis=0)
+    sd_ = data.std(axis=0,ddof=0)
+    WPEMAX = numpy.log(abs(20*numpy.log10(abs(numpy.where(sd_ == 0, 0, m_/sd_)))))
+    #accurately estimate the maximum good rotations
+    highrotations, lowrotations , residual = MEITD(data,WPEMAX)
             
     
     highrotations = highrotations[np.all(highrotations!=0, axis=1)]#take only the rows which are nonzero
