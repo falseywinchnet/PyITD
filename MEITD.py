@@ -263,7 +263,7 @@ def matlab_detect_peaks(x: list[float]):
     vix = numpy.zeros(dx.size + 1)
     vix[1:] = dx[:]
 
-    ind = numpy.unique(numpy.where((vil >= 0) & (vix < 0))[0])
+    ind = numpy.unique(numpy.where((vil > 0) & (vix <= 0))[0])
     #ind = ind - 1 #gotta shift it back to the left
 
     # this adjustment is intended to implement "rightmost value of flat peaks" efficiently.
@@ -533,22 +533,13 @@ def MEITD(data: numpy.ndarray, max_iteration: int = 40,WPEMAX: float = 0.6) -> n
 
     return highrotations[0:highcounter, :],  lowrotations[0:lowcounter, :], x[:]
 
-def XITD(data: numpy.ndarray,WPEMAX):
+def XITD(data: numpy.ndarray):
     data = data.astype(dtype=numpy.float64)
     m_ = data.mean(axis=0)
     sd_ = data.std(axis=0,ddof=0)
-    #WPEMAX = numpy.log(abs(20*numpy.log10(abs(numpy.where(sd_ == 0, 0, m_/sd_)))))
+    WPEMAX = numpy.log(abs(20*numpy.log10(abs(numpy.where(sd_ == 0, 0, m_/sd_)))))
     #accurately estimate the maximum good rotations
     highrotations, lowrotations , residual = MEITD(data,WPEMAX)
-            
-    
-    highrotations = highrotations[np.all(highrotations!=0, axis=1)]#take only the rows which are nonzero
-    highrotations = numpy.unique(highrotations,axis=0)
-
-    
-    lowrotations = lowrotations[np.all(lowrotations!=0, axis=1)]
-    lowrotations = numpy.unique(lowrotations,axis=0)
-    
     rotations = numpy.vstack((highrotations,lowrotations))
     rotations = numpy.vstack((rotations,residual))
     ent = []
