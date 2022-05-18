@@ -236,7 +236,7 @@ def isin(a, b):
     return out
 
 
-@numba.njit(numba.int64[:](numba.float64[:]))
+#@numba.njit(numba.int64[:](numba.float64[:]))
 def matlab_detect_peaks(x: list[float]):
     """Detect peaks in data based on their amplitude and other features.
     warning: this code is an optimized copy of the "Marcos Duarte, https://github.com/demotu/BMC"
@@ -248,6 +248,7 @@ def matlab_detect_peaks(x: list[float]):
     if len(x) < 3:
         return numpy.empty(1, numpy.int64)
     dx = x[1:] - x[:-1]
+    dx = -dx
     # handle NaN's
     indnan = numpy.where(numpy.isnan(x))[0]
     indl = numpy.asarray(indnan)
@@ -262,19 +263,9 @@ def matlab_detect_peaks(x: list[float]):
     vix = numpy.zeros(dx.size + 1)
     vix[1:] = dx[:]
 
-    ind = numpy.unique(numpy.where((vil <= 0) & (vix > 0))[0])
+    ind = numpy.unique(numpy.where((vil >= 0) & (vix < 0))[0])
+    #ind = ind - 1 #gotta shift it back to the left
 
-    rx = numpy.append(dx, [dx[-1] + 1])
-    arr_diff = numpy.diff(rx)
-    res_mask = arr_diff == 0
-    arr_diff_zero_right = numpy.nonzero(res_mask)[0] + 1
-    res_mask[arr_diff_zero_right] = True
-    repeating = numpy.nonzero(res_mask)[0]
-    rset = set(repeating)
-    if len(repeating) != 0:  # if there are repeating elements:
-        for each in range(len(ind)):
-            if ind[each] in rset:  # is this a repeating index?
-                ind[each] = numpy.argmax(dx[ind[each]:] != dx[ind[each]]) - 1  # if so, set it to the rightmost value.
     # this adjustment is intended to implement "rightmost value of flat peaks" efficiently.
     # https://arxiv.org/pdf/1404.3827v1.pdf page 3 - always take right-most sample
 
@@ -292,26 +283,7 @@ def matlab_detect_peaks(x: list[float]):
         ind = ind[:-1]
 
     # eliminate redundant values
-    return numpy.unique(ind)
-
-
-@numba.njit(numba.int64[:](numba.float64[:]))
-def detect_peaks(x: list[numpy.float64]):
-    # warning: this is not a good, proper, peak-finding method.
-    # all this does is determine extrema location and counts for ITD.
-    # if you want a matlab findpeaks, use Marcos Duarte's findpeaks.
-    # if you want a good general purpose peakfinding method, use a guassian method.
-
-    f = x.copy()
-    locmax = numpy.zeros_like(f)
-
-    for i in range(1, len(x) - 1):  # don't consider an end value a peak.
-        if (f[i] >= f[i - 1]):
-            if (f[i] > f[i + 1]):
-                if (f[i] > 0):
-                    locmax[i] = 1  # strictly rising peaks
-    return numpy.where(locmax == 1)[0]
-
+    return ind
 
 @numba.jit(cache=True)
 def baseline_knot_estimation(baseline_knots: list[numpy.float64], x: list[numpy.float64],
@@ -336,6 +308,7 @@ def itd_baseline_extract(data: list[numpy.float64]) -> [numpy.ndarray, numpy.nda
 
     idx_max = numpy.asarray(matlab_detect_peaks(x))
     idx_min = numpy.asarray(matlab_detect_peaks(-x))
+
 
     num_extrema = idx_min.size + idx_max.size
     #if num_extrema < 5:
@@ -375,8 +348,8 @@ def retrieve_proper_rotation(x: numpy.ndarray,WPEMAX):
     rotation_ = numpy.zeros((len(x)), dtype=numpy.float64)
     baseline_ = numpy.zeros((len(x)), dtype=numpy.float64)
     beta = math.fsum(x)
-    idx_max = numpy.asarray(detect_peaks(x))
-    idx_min = numpy.asarray(detect_peaks(-x))
+    idx_max = numpy.asarray(matlab_detect_peaks(x))
+    idx_min = numpy.asarray(matlab_detect_peaks(-x))
     num_extrema = idx_min.size + idx_max.size
     baseline_[:] = x.copy() #we start with the rotation and we take it from there
     if num_extrema < 5:
@@ -434,8 +407,8 @@ def MEITD(data: numpy.ndarray, max_iteration: int = 40,WPEMAX: float = 0.6) -> n
     xchanged = 0
     HILO = 1
     soft_reset = 1
-    idx_max = numpy.asarray(detect_peaks(x))
-    idx_min = numpy.asarray(detect_peaks(-x))
+    idx_max = numpy.asarray(matlab_detect_peaks(x))
+    idx_min = numpy.asarray(matlab_detect_peaks(-x))
     num_extrema = idx_min.size + idx_max.size
     if num_extrema < 4:
         return zero_sum , zero_sum , x
@@ -560,11 +533,11 @@ def MEITD(data: numpy.ndarray, max_iteration: int = 40,WPEMAX: float = 0.6) -> n
 
     return highrotations[0:highcounter, :],  lowrotations[0:lowcounter, :], x[:]
 
-def XITD(data: numpy.ndarray):
+def XITD(data: numpy.ndarray,WPEMAX):
     data = data.astype(dtype=numpy.float64)
     m_ = data.mean(axis=0)
     sd_ = data.std(axis=0,ddof=0)
-    WPEMAX = numpy.log(abs(20*numpy.log10(abs(numpy.where(sd_ == 0, 0, m_/sd_)))))
+    #WPEMAX = numpy.log(abs(20*numpy.log10(abs(numpy.where(sd_ == 0, 0, m_/sd_)))))
     #accurately estimate the maximum good rotations
     highrotations, lowrotations , residual = MEITD(data,WPEMAX)
             
