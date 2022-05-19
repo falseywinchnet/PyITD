@@ -36,12 +36,11 @@ def segm_tec(f,N):
         M = N+1# numbers of the boundaries
         omega = numpy.concatenate(([0],desc_sort_index))
         omega = numpy.concatenate((omega,[len(f)]))
-        bounds = numpy.zeros((M))
+        bounds = numpy.zeros((M),dtype=int)
         for i in range(M):
             if (i == 0 or i == M) and (omega[i] == omega[i+1]):
                 bounds[i] = omega[i]-1;
             else:
-                print(i,omega)
                 ind = numpy.argmin(f[omega[i]:omega[i+1]])
                 bounds[i] = omega[i]+ind-2;
         cerf = desc_sort_index*numpy.pi/round(len(f))
@@ -57,10 +56,11 @@ def EFD(x: list[numpy.float64], N: int):
     
     fx =  planfftw.fft(x)
     ff = fx(x)
-
+    fr = round((ff.size/2))
     #extract the boundaries of Fourier segments
     bounds,cerf = segm_tec(abs(ff[0:round(ff.size/2)]),N)
     bounds = numpy.concatenate(([0],bounds)) #fix : 5/10/22 temp patch for the first value
+    bounds = numpy.concatenate((bounds,[fr])) #fix : 5/10/22 temp patch for the first value
     # truncate the boundaries to [0,pi]
     bounds = bounds*numpy.pi/round(len(ff)/2)
     
