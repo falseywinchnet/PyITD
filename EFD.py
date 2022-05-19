@@ -1,5 +1,6 @@
 import pyfftw
 import planfftw
+import numpy
 #copied from the matlab by falsy winchnet.
 #Emperical Fourier Decomposition technique
 #uses fftw, pyfftw, planfftw for fast and easy precise decomp accuracy ~1.0-14 error
@@ -12,14 +13,15 @@ def segm_tec(f,N):
             if(f[i] > 0): #a value below 0 or 0 is not a maxima!
                 locmax[i]= 1
         
-    locmax[0] = 1
-    locmax[-1] = 1
+    #locmax[0] = 1
+    #locmax[-1] = 1
     
     #ok, now we have our maxima
     desc_sort_index = numpy.where(locmax == 1)[0]
 
     ind = numpy.where(locmax == 1)[0]
     top_amplitudes = numpy.argsort(f) #sort F by amplitude
+    top_amplitudes = top_amplitudes[::-1] #this returns a reverse-sorted array.
     desc_sort_bool = numpy.isin(top_amplitudes,ind)# get the top amplitudes which are peaks
     
     desc_sort_index = top_amplitudes[desc_sort_bool] #retrieve them
@@ -30,6 +32,7 @@ def segm_tec(f,N):
         else:
             desc_sort_index = desc_sort_index
             N = len(desc_sort_index)
+        desc_sort_index = numpy.sort(desc_sort_index) #gotta sort them again 
         M = N+1# numbers of the boundaries
         omega = numpy.concatenate(([0],desc_sort_index))
         omega = numpy.concatenate((omega,[len(f)]))
@@ -38,7 +41,7 @@ def segm_tec(f,N):
             if (i == 0 or i == M) and (omega[i] == omega[i+1]):
                 bounds[i] = omega[i]-1;
             else:
-                print((f[omega[i]:omega[i+1]]))
+                print(i,omega)
                 ind = numpy.argmin(f[omega[i]:omega[i+1]])
                 bounds[i] = omega[i]+ind-2;
         cerf = desc_sort_index*numpy.pi/round(len(f))
