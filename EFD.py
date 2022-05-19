@@ -18,9 +18,11 @@ def segm_tec(f,N):
     #ok, now we have our maxima
     desc_sort_index = numpy.where(locmax == 1)[0]
 
-    #it is not necessary to do anything else with an FFT- the FFT
-    #is already sorted by amplitude!    
-                  
+    ind = numpy.where(locmax == 1)[0]
+    top_amplitudes = numpy.argsort(f) #sort F by amplitude
+    desc_sort_bool = numpy.isin(top_amplitudes,ind)# get the top amplitudes which are peaks
+    
+    desc_sort_index = top_amplitudes[desc_sort_bool] #retrieve them
     if N != 0: #keep the N-th highest maxima and their index
         
         if len(desc_sort_index) > N:
