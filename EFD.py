@@ -1,9 +1,6 @@
-import pyfftw
-import planfftw
 import numpy
 #copied from the matlab by falsy winchnet.
 #Emperical Fourier Decomposition technique
-
 
 def segm_tec(f,N):
     locmax = numpy.zeros((f.size))
@@ -11,7 +8,6 @@ def segm_tec(f,N):
         if ((f[i-1] <= f[i]) and (f[i] > f[i+1])):
             if(f[i] > 0): #a value below 0 or 0 is not a maxima!
                 locmax[i]= f[i]
-    
     
     desc_sort_index = numpy.argsort(locmax)[::-1]
     count_nonzeros = numpy.nonzero(locmax)
@@ -31,18 +27,14 @@ def segm_tec(f,N):
             bounds.append(desc_sort_index[i-1] + numpy.argmin(f[desc_sort_index[i-1]:desc_sort_index[i]]) - 1)     
         bounds.append(desc_sort_index[N] + numpy.argmin(f[desc_sort_index[N]:len(f)]) - 1)
         bounds.append(len(f))
-        bounds = numpy.asarray(bounds)
         cerf = desc_sort_index*numpy.pi/round(len(f))
-    return bounds, cerf
-
+    return numpy.asarray(bounds), cerf
 
 #https://arxiv.org/pdf/2009.08047v2.pdf
 def EFD(x: list[numpy.float64], N: int):
     #we will now implement the Empirical Fourier Decomposition
     x = numpy.asarray(x,dtype=numpy.float64)
-    
-    fx =  planfftw.fft(x)
-    ff = fx(x)
+    ff = numpy.fft.rfft(x)
     #extract the boundaries of Fourier segments
     bounds,cerf = segm_tec(abs(ff[0:round(ff.size/2)]),N)
     # truncate the boundaries to [0,pi]
@@ -51,9 +43,7 @@ def EFD(x: list[numpy.float64], N: int):
     # extend the signal by miroring to deal with the boundaries
     l = round(len(x)/2)
     z = numpy.lib.pad(x,((round(len(x)/2)),round(len(x)/2)),'symmetric') 
-
-    fr =  planfftw.fft(z)
-    ff = fr(z)
+    ff =  numpy.fft.rfft(z)
     # obtain the boundaries in the extend f
     bound2 = numpy.ceil(bounds*round(len(ff)/2)/numpy.pi).astype(dtype=int)
     efd = numpy.zeros(((len(bound2)-1,len(x))),dtype=numpy.float64)
@@ -71,7 +61,7 @@ def EFD(x: list[numpy.float64], N: int):
             #ft[k,len(ff)+1-bound2[k+1]:len(ff)+1-bound2[k]] = ff[len(ff)+1-bound2[k+1]:len(ff)+1-bound2[k]]
 
             ft[k,-bound2[k+1]:-bound2[k]] = ff[-bound2[k+1]:-bound2[k]]
-        rx = numpy.real(fz(ft[k,:]))
+        rx = numpy.fft.irfft(ft[k,:])
         efd[k,:] = rx[l:-l]
 
 
