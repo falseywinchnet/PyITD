@@ -3,25 +3,22 @@ import planfftw
 import numpy
 #copied from the matlab by falsy winchnet.
 #Emperical Fourier Decomposition technique
-#uses fftw, pyfftw, planfftw for fast and easy precise decomp accuracy 
+
 
 def segm_tec(f,N):
-    locmax = numpy.zeros((f.size),dtype=int)
+    locmax = numpy.zeros_like(f)
     for i in range(1,len(f)-1): 
         if ((f[i-1] <= f[i]) and (f[i] > f[i+1])):
             if(f[i] > 0): #a value below 0 or 0 is not a maxima!
-                locmax[i]= 1
-
+                locmax[i]= f[i]
+    
+    desc_sort_index = numpy.argsort(locmax)[::-1]
+    count_nonzeros = numpy.nonzero(locmax)
+    desc_sort_bool = numpy.isin(desc_sort_index,count_nonzeros)# get the top amplitudes which are peaks
+    desc_sort_index = desc_sort_index[desc_sort_bool]
     
     #ok, now we have our maxima
-    desc_sort_index = numpy.where(locmax == 1)[0]
-
-    indexes = numpy.where(locmax == 1)[0]
-    top_amplitudes = numpy.argsort(f) #sort F by amplitude
-    top_amplitudes = top_amplitudes[::-1] #this returns a reverse-sorted array.
-    desc_sort_bool = numpy.isin(top_amplitudes,indexes)# get the top amplitudes which are peaks
     
-    desc_sort_index = top_amplitudes[desc_sort_bool] #retrieve them
     if N != 0: #keep the N-th highest maxima and their index
         if len(desc_sort_index) > N:
             desc_sort_index = desc_sort_index[0:N+1]
@@ -38,6 +35,7 @@ def segm_tec(f,N):
         bounds = numpy.asarray(bounds)
         cerf = desc_sort_index*numpy.pi/round(len(f))
     return bounds, cerf
+
 
 #https://arxiv.org/pdf/2009.08047v2.pdf
 def EFD(x: list[numpy.float64], N: int):
@@ -63,7 +61,6 @@ def EFD(x: list[numpy.float64], N: int):
 
     # obtain the boundaries in the extend f
     bound2 = numpy.ceil(bounds*round(len(ff)/2)/numpy.pi).astype(dtype=int)
-    #bound2 = numpy.concatenate((bound2,[8000]))
     efd = numpy.zeros(((len(bound2)-1,len(x))),dtype=numpy.float64)
     ft = numpy.zeros((efd.shape[0],len(ff)),dtype=numpy.cdouble)
     fz =  planfftw.ifft(ft[0,:])
