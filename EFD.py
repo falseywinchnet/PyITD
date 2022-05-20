@@ -10,7 +10,7 @@ def segm_tec(f, N):
                 locmax[i] = f[i]
 
     desc_sort_index = numpy.argsort(locmax)[::-1]
-    desc_sort_bool = numpy.empty(desc_sort_index.shape[0], dtype=numba.boolean)
+    desc_sort_bool = numpy.empty(desc_sort_index.shape[0], dtype=bool)
     for i in range(desc_sort_index.size):
         if locmax[i] > 0:
             desc_sort_bool[i] = True
