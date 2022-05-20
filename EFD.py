@@ -13,9 +13,8 @@ def segm_tec(f,N):
                 locmax[i]= f[i]
     
     desc_sort_index = numpy.argsort(locmax)[::-1]
-    count_nonzeros = numpy.nonzero(locmax)
-    desc_sort_bool = numpy.isin(desc_sort_index,count_nonzeros)# get the top amplitudes which are peaks
-    desc_sort_index = desc_sort_index[desc_sort_bool]
+    desc_sort_index = desc_sort_index[(desc_sort_index == locmax).sum(-1).astype(bool)] #get nonzeros
+
     
     #ok, now we have our maxima
     
