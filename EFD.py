@@ -19,22 +19,17 @@ def segm_tec(f, N):
 
     if N != 0:  # keep the N-th highest maxima and their index
         if len(desc_sort_index) > N:
-            desc_sort_index = desc_sort_index[0:N]
-            print(desc_sort_index)
-
+            desc_sort_index = desc_sort_index[0:N + 1]
         else:
             N = desc_sort_index.size
         desc_sort_index = numpy.sort(desc_sort_index)  # gotta sort them again
-        print(desc_sort_index)
-        bounds = numpy.zeros(N+2, dtype=int)
+        bounds = numpy.empty(N+2, dtype=int)
         bounds[0] = 0
-        for i in range(N-1): #2-12 for 10 N
-            bounds[i+1] = (desc_sort_index[i] + numpy.argmin(f[desc_sort_index[i]:desc_sort_index[i+1]])) 
-        bounds[-2] = (desc_sort_index[-1] + numpy.argmin(f[desc_sort_index[-1]:len(f)])) 
+        bounds[1] = (numpy.argmin(f[0:desc_sort_index[0]]))  # -2
+        for i in range(N - 2):
+            bounds[i+2] = (desc_sort_index[i] + numpy.argmin(f[desc_sort_index[i]:desc_sort_index[i+1]]) - 1)
+        bounds[-2] = (desc_sort_index[N] + numpy.argmin(f[desc_sort_index[N]:len(f)]) - 1)
         bounds[-1] = f.size
-
-
-        print(bounds)
         cerf = desc_sort_index * numpy.pi / round(len(f))
     return numpy.asarray(bounds), cerf
 
@@ -47,6 +42,7 @@ def EFD(x: list[numpy.float64], N: int):
     ff = numpy.fft.rfft(x)
     #extract the boundaries of Fourier segments
     bounds,cerf = segm_tec(abs(ff[0:round(ff.size/2)]),N)
+    print(bounds)
     # truncate the boundaries to [0,pi]
     bounds = bounds*numpy.pi/round(len(ff)/2)
     
@@ -55,9 +51,6 @@ def EFD(x: list[numpy.float64], N: int):
     z = numpy.lib.pad(x,((round(len(x)/2)),round(len(x)/2)),'symmetric')
     
     ff = numpy.fft.rfft(z)
-    #ff = out[:]
-            
-    #ff =  numpy.fft.rfft(z)
     # obtain the boundaries in the extend f
     bound2 = numpy.ceil(bounds*round(len(ff)/2)/numpy.pi).astype(dtype=int)
     efd = numpy.zeros(((len(bound2)-1,len(x))),dtype=numpy.float64)
