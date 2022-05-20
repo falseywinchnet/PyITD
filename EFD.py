@@ -23,7 +23,7 @@ def segm_tec(f, N):
         else:
             N = desc_sort_index.size
         desc_sort_index = numpy.sort(desc_sort_index)  # gotta sort them again
-        bounds = numpy.empty(N+2, dtype=numba.int64)
+        bounds = numpy.empty(N+2, dtype=int)
         bounds[0] = 0
         bounds[1] = (numpy.argmin(f[0:desc_sort_index[0]]))  # -2
         for i in range(N - 2):
