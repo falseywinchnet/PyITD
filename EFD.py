@@ -48,7 +48,6 @@ def EFD(x: list[numpy.float64], N: int):
     bound2 = numpy.ceil(bounds*round(len(ff)/2)/numpy.pi).astype(dtype=int)
     efd = numpy.zeros(((len(bound2)-1,len(x))),dtype=numpy.float64)
     ft = numpy.zeros((efd.shape[0],len(ff)),dtype=numpy.cdouble)
-    fz =  planfftw.ifft(ft[0,:])
     # define an ideal functions and extract components
     for k in range(efd.shape[0]): 
         if bound2[k] == 0:
