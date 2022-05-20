@@ -55,16 +55,11 @@ def EFD(x: list[numpy.float64], N: int):
     for k in range(efd.shape[0]): 
         if bound2[k] == 0:
             ft[k,0:bound2[k+1]] = ff[0:bound2[k+1]]
-            #ft[k,len(ff)+1-bound2[k+1]:len(ff)] = ff[len(ff)+1-bound2[k+1]:len(ff)]
             ft[k,-bound2[k+1]:len(ff)] = ff[-bound2[k+1]:len(ff)]
-
         else:
             ft[k,bound2[k]:bound2[k+1]] = ff[bound2[k]:bound2[k+1]]
-            #ft[k,len(ff)+1-bound2[k+1]:len(ff)+1-bound2[k]] = ff[len(ff)+1-bound2[k+1]:len(ff)+1-bound2[k]]
-
             ft[k,-bound2[k+1]:-bound2[k]] = ff[-bound2[k+1]:-bound2[k]]
         rx = numpy.fft.irfft(ft[k,:])
         efd[k,:] = rx[l:-l]
-
 
     return efd,cerf,bounds
