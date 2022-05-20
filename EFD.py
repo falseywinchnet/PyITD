@@ -6,20 +6,18 @@ import numpy
 
 
 def segm_tec(f,N):
-    locmax = numpy.zeros_like(f)
+    locmax = numpy.zeros((f.size))
     for i in range(1,len(f)-1): 
         if ((f[i-1] <= f[i]) and (f[i] > f[i+1])):
             if(f[i] > 0): #a value below 0 or 0 is not a maxima!
                 locmax[i]= f[i]
+    
     
     desc_sort_index = numpy.argsort(locmax)[::-1]
     count_nonzeros = numpy.nonzero(locmax)
     desc_sort_bool = numpy.isin(desc_sort_index,count_nonzeros)# get the top amplitudes which are peaks
     desc_sort_index = desc_sort_index[desc_sort_bool]
 
-    
-    #ok, now we have our maxima
-    
     if N != 0: #keep the N-th highest maxima and their index
         if len(desc_sort_index) > N:
             desc_sort_index = desc_sort_index[0:N+1]
@@ -50,16 +48,12 @@ def EFD(x: list[numpy.float64], N: int):
     # truncate the boundaries to [0,pi]
     bounds = bounds*numpy.pi/round(len(ff)/2)
     
-
     # extend the signal by miroring to deal with the boundaries
     l = round(len(x)/2)
-    #x = [x(l-1:-1:1);x;x(end:-1:end-l+1)];
-    z = numpy.concatenate((numpy.flip(x[:l]),x))
-    z = numpy.concatenate((z,numpy.flip(x[-l:])))
+    z = numpy.lib.pad(x,((round(len(x)/2)),round(len(x)/2)),'symmetric') 
 
     fr =  planfftw.fft(z)
     ff = fr(z)
-
     # obtain the boundaries in the extend f
     bound2 = numpy.ceil(bounds*round(len(ff)/2)/numpy.pi).astype(dtype=int)
     efd = numpy.zeros(((len(bound2)-1,len(x))),dtype=numpy.float64)
@@ -69,10 +63,14 @@ def EFD(x: list[numpy.float64], N: int):
     for k in range(efd.shape[0]): 
         if bound2[k] == 0:
             ft[k,0:bound2[k+1]] = ff[0:bound2[k+1]]
-            ft[k,len(ff)+1-bound2[k+1]:len(ff)] = ff[len(ff)+1-bound2[k+1]:len(ff)]
+            #ft[k,len(ff)+1-bound2[k+1]:len(ff)] = ff[len(ff)+1-bound2[k+1]:len(ff)]
+            ft[k,-bound2[k+1]:len(ff)] = ff[-bound2[k+1]:len(ff)]
+
         else:
             ft[k,bound2[k]:bound2[k+1]] = ff[bound2[k]:bound2[k+1]]
-            ft[k,len(ff)+1-bound2[k+1]:len(ff)+1-bound2[k]] = ff[len(ff)+1-bound2[k+1]:len(ff)+1-bound2[k]]
+            #ft[k,len(ff)+1-bound2[k+1]:len(ff)+1-bound2[k]] = ff[len(ff)+1-bound2[k+1]:len(ff)+1-bound2[k]]
+
+            ft[k,-bound2[k+1]:-bound2[k]] = ff[-bound2[k+1]:-bound2[k]]
         rx = numpy.real(fz(ft[k,:]))
         efd[k,:] = rx[l:-l]
 
