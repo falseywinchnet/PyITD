@@ -39,7 +39,7 @@ def EFD(x: list[numpy.float64], N: int):
     #we will now implement the Empirical Fourier Decomposition
     x = numpy.asarray(x,dtype=numpy.float64)
     
-    ff = numpy.fft.rfft(x)
+    ff = numpy.fft.fft(x)
     #extract the boundaries of Fourier segments
     bounds,cerf = segm_tec(abs(ff[0:round(ff.size/2)]),N)
     print(bounds)
@@ -50,7 +50,7 @@ def EFD(x: list[numpy.float64], N: int):
     l = round(len(x)/2)
     z = numpy.lib.pad(x,((round(len(x)/2)),round(len(x)/2)),'symmetric')
     
-    ff = numpy.fft.rfft(z)
+    ff = numpy.fft.fft(z)
     # obtain the boundaries in the extend f
     bound2 = numpy.ceil(bounds*round(len(ff)/2)/numpy.pi).astype(dtype=int)
     efd = numpy.zeros(((len(bound2)-1,len(x))),dtype=numpy.float64)
@@ -67,7 +67,7 @@ def EFD(x: list[numpy.float64], N: int):
             #ft[k,len(ff)+1-bound2[k+1]:len(ff)+1-bound2[k]] = ff[len(ff)+1-bound2[k+1]:len(ff)+1-bound2[k]]
 
             ft[k,-bound2[k+1]:-bound2[k]] = ff[-bound2[k+1]:-bound2[k]]
-        rx =  numpy.fft.irfft(ft[k,:]) 
+        rx =  numpy.real(numpy.fft.ifft(ft[k,:]))
         efd[k,:] = rx[l:-l]
 
 
