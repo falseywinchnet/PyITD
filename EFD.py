@@ -3,8 +3,7 @@ import planfftw
 import numpy
 #copied from the matlab by falsy winchnet.
 #Emperical Fourier Decomposition technique
-#uses fftw, pyfftw, planfftw for fast and easy precise decomp accuracy ~1.0-14 error
-#which is around the precision FFT is capable of
+#uses fftw, pyfftw, planfftw for fast and easy precise decomp accuracy 
 
 def segm_tec(f,N):
     locmax = numpy.zeros((f.size),dtype=int)
@@ -39,19 +38,11 @@ def segm_tec(f,N):
         bounds = numpy.asarray(bounds)
         cerf = desc_sort_index*numpy.pi/round(len(f))
     return bounds, cerf
-#[  0   5  11  18  24  30  33  40  45  52  57  60  93 793]
-#[  0   5  11  18  24  30  33  40  45  52  57  60  93 793]
-#[  1   9  14  21  25  30  36  40  47  52  58  61 773 793]
-#[  0   5  11  18  24  30  33  40  45  52  57  60  93 793]
-#[  0   5  11  18  24  30  33  40  45  52  57  60  93 793]
-#[  0 1   9  14  21  25  30  36  40  47  52  58  0]
 
 #https://arxiv.org/pdf/2009.08047v2.pdf
 def EFD(x: list[numpy.float64], N: int):
     #we will now implement the Empirical Fourier Decomposition
-    #what is it with me and signal decomposition approaches??
     x = numpy.asarray(x,dtype=numpy.float64)
-    #we will assume that x is 1d, if x is 2d, test and transform to put rows-first
     
     fx =  planfftw.fft(x)
     ff = fx(x)
