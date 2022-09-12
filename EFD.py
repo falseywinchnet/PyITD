@@ -64,7 +64,9 @@ def segm_tec(f, N):
             bounds[i + 2] = (desc_sort_index[i] + numpy.argmin(x[desc_sort_index[i]:desc_sort_index[i + 1]]) - 1)
         bounds[-2] = (desc_sort_index[-1] + numpy.argmin(x[desc_sort_index[-1]:x.size]) - 1)
     bounds[-1] = x.size
-    return numpy.asarray(bounds)
+    cerf = desc_sort_index * numpy.pi / round(len(f))
+    
+    return numpy.asarray(bounds), cerf
 
 
 def EFD(data: numpy.ndarray, N: int):
@@ -75,7 +77,7 @@ def EFD(data: numpy.ndarray, N: int):
     x = numpy.asarray(data, dtype=numpy.float64)
     ff = numpy.fft.rfft(x)
     # extract the boundaries of Fourier segments
-    bounds = segm_tec(numpy.absolute(ff[0:round(ff.size / 2)]), N)
+    bounds, cerf = segm_tec(numpy.absolute(ff[0:round(ff.size / 2)]), N)
     if bounds.size < 3:
         return x #no need to go further because we have nothing to work with
     # truncate the boundaries to [0,pi]
@@ -105,4 +107,4 @@ def EFD(data: numpy.ndarray, N: int):
         rx = numpy.fft.irfft(ft[k, :])
         efd[k, :] = rx[l:-l].real
 
-    return efd.astype(dtype=data.dtype),bounds
+    return efd.astype(dtype=data.dtype), cerf, bounds
