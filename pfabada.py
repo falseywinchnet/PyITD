@@ -174,3 +174,32 @@ def numba_fabada(data: numpy.ndarray) -> (numpy.ndarray):
 
 
     return x
+
+
+#here is the logic needed for a 2d nearest neighbors smoothing algo.
+#this, along with replacing loop-specific logic in 1d with 2d, allows fabada to be generalized to the 2d domain.
+        normal = posterior_mean.copy()
+        transposed = posterior_mean.copy()
+        transposed = transposed.T
+        transposed_raveled = numpy.ravel(transposed)
+        normal_raveled = numpy.ravel(normal)
+
+        target_a = numpy.zeros_like(normal_raveled)
+        target_b = numpy.zeros_like(normal_raveled)
+
+        # GENERATES PRIORS
+        for i in range(elements - 1):
+            target_a[:] = (normal_raveled[i - 1] + normal_raveled[i] + normal_raveled[i + 1]) / 3
+
+        target_a[0] = (normal_raveled[0] + (normal_raveled[1] + normal_raveled[2]) / 2) / 3
+        target_a[-1] = (normal_raveled[-1] + (normal_raveled[-2] + normal_raveled[-3]) / 2) / 3
+        normal_raveled[:] = target_a[:]
+
+        for i in range(elements - 1):
+            target_b[:] = (transposed_raveled[i - 1] + transposed_raveled[i] + transposed_raveled[i + 1]) / 3
+
+        target_b[0] = (transposed_raveled[0] + (transposed_raveled[1] + transposed_raveled[2]) / 2) / 3
+        target_b[-1] = (transposed_raveled[-1] + (transposed_raveled[-2] + transposed_raveled[-3]) / 2) / 3
+        transposed_raveled[:] = target_b[:]
+        transposed = transposed.T
+        prior_mean = (transposed + normal)/2 
