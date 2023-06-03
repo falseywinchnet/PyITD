@@ -113,6 +113,17 @@ This is a robust way of estimating the standard deviation of the noise. Here is 
 dwtn(x, wavelet='db2'): This function applies a Discrete Wavelet Transform (DWT) to the data x using the Daubechies 2 wavelet. 
 The DWT decomposes a signal into approximation and detail coefficients at various scales. For an image, dwtn gives you a dictionary of approximation and detail coefficients along each dimension.
 
+Choosing a wavelet: The Daubechies wavelet with two vanishing moments (db2) is chosen here. 
+You would need to represent this wavelet in code. The db2 wavelet's scaling function can be represented by the coefficients [0.7071067811865476, 0.7071067811865476].
+
+Convolution and downsampling: Apply the wavelet filter (obtained from the chosen wavelet) to the data through convolution, then downsample the data. 
+This will give you the approximation and detail coefficients.
+
+Handling the edge: When you apply the filter, you will have to decide on how to handle the edges of the data. 
+There are different methods like zero padding, symmetric padding, periodic padding, etc.
+
+Multilevel decomposition: If you want a multilevel decomposition (which is usually the case in wavelet transforms), you would repeat steps 2 and 3 on the approximation coefficients obtained in the previous level.
+
 coeffs['d' * x.ndim]: The detail coefficients are extracted. 
 The 'd' represents detail and the multiplication by x.ndim simply creates a string of 'd's of the same length as the number of dimensions in x. 
 For a 2D image, it would be 'dd', indicating detail coefficients along both dimensions.
