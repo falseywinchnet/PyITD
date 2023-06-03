@@ -1,74 +1,163 @@
-Procedure numba_fabada(data):
+Procedure fabada(data):
 
-  Initialize x as a zero array of the same shape as data
-  Set x equal to a copy of data
-  Replace NaN values in x with 0
+Initialize x as a zero array of the same shape as data
 
-  Set iterations to 1
-  Set N as the size of x
-  Set max_iterations to 1000
+Set x equal to a copy of data
 
-  Initialize bayesian_weight, bayesian_model, model_weight, posterior_mean, initial_evidence, evidence, prior_mean, prior_variance, and posterior_variance as zero arrays of the same shape as x
+Replace NaN values in x with 0
 
-  Set posterior_mean and prior_mean equal to a copy of x
+Set iterations to 1
 
-  Calculate the noise variance sigma using an external procedure
+Set N as the size of x
 
-  Set data_variance as an array of the same size as x, all elements equal to sigma squared
-  Replace NaN values in data_variance with 1e-15
-  Replace 0 values in data_variance with 1e-15
+Set max_iterations to 1000
 
-  Set posterior_variance and prior_variance equal to a copy of data_variance
+Initialize bayesian_weight, bayesian_model, model_weight, posterior_mean, initial_evidence, evidence, prior_mean, prior_variance, and posterior_variance as zero arrays of the same shape as x
 
-  Calculate initial evidence and set evidence equal to it
+Set posterior_mean and prior_mean equal to a copy of x
 
-  Initialize evidence_previous as the mean of evidence
+Calculate the noise variance sigma using an external procedure
 
-  Start an infinite loop:
+Set data_variance as an array of the same size as x, all elements equal to sigma squared
 
-    For each element in the arrays, excluding the first and the last, set the corresponding element of prior_mean to the average of its neighboring elements in posterior_mean
-    Set the first and the last elements of prior_mean to the average of their immediate neighbors and the neighbors' neighbors in posterior_mean
+Replace NaN values in data_variance with 1e-15
 
-    Set prior_variance equal to a copy of posterior_variance
+Replace 0 values in data_variance with 1e-15
 
-    Apply Bayes' Theorem:
-      For each element in the arrays:
-        If the corresponding element of prior_variance is greater than 0:
-          Update the corresponding element of posterior_variance by using the formula "(data_variance[i] * prior_variance[i])/(data_variance[i] + prior_variance[i])"
-        Else, set it to 0
+Set posterior_variance and prior_variance equal to a copy of data_variance
 
-      For each element in the arrays:
-        If the corresponding elements of prior_variance and posterior_variance are greater than 0:
-          Update the corresponding element of posterior_mean by using the formula "((prior_mean[i] / prior_variance[i]) + (x[i] / data_variance[i])) * posterior_variance[i]"
-        Else, set it to the corresponding element of prior_mean
+Calculate initial evidence and set evidence equal to it using the formula:
+upper = -1 * ((data_variance)^0.5)^2
+lower = 2 * data_variance
+first = upper / lower
+second = sqrt(2 * pi) * data_variance
+evidence[i] = exp(first) / second
 
-    Calculate evidence using the formula
+Initialize evidence_previous as the mean of evidence
 
-    Calculate evidence_derivative as the difference between the mean of evidence and evidence_previous
-    Set evidence_previous equal to the mean of evidence
+Start an infinite loop:
+LOOPSTART
 
-    Calculate chi2_data using the formula
+For i = 1 to N-2 { 
+    Set prior_mean[i] to the average of posterior_mean[i-1], posterior_mean[i], posterior_mean[i+1]
+}
 
-    On the first iteration, set chi2_data_min equal to chi2_data
+Set prior_mean[0] to the average of posterior_mean[0] and the average of posterior_mean[1] and posterior_mean[2]
 
-    For each element in the arrays:
-      Update the corresponding element of model_weight as the product of the corresponding element of evidence and chi2_data
-      Increment the corresponding element of bayesian_weight by the corresponding element of model_weight
-      Increment the corresponding element of bayesian_model by the product of the corresponding element of model_weight and the corresponding element of posterior_mean
+Set prior_mean[N-1] to the average of posterior_mean[N-1] and the average of posterior_mean[N-2] and posterior_mean[N-3]
 
-    If chi2_data is greater than N and evidence_derivative is negative, or if iterations exceeds max_iterations, break the loop
-    Increment iterations by 1
+Set prior_variance equal to a copy of posterior_variance
 
-  For each element in the arrays:
-    Update the corresponding element of model_weight as the product of the corresponding element of initial_evidence and chi2_data_min
-    Increment the corresponding element of bayesian_weight by the corresponding element of model_weight
-    Increment the corresponding element of bayesian_model by the product of the corresponding element of model_weight and the corresponding element of x
+Iterator for each element in x:
+  If( the corresponding element of prior_variance is greater than 0){
+    Update the corresponding element of posterior_variance using the formula "(data_variance[i] * prior_variance[i])/(data_variance[i] + prior_variance[i])"
+  } Else{
+    Set posterior_variance for that element to 0
+  }
 
-  For each element in the arrays:
-    If the corresponding element of bayesian_weight is greater than 0:
-      Update the corresponding element of x as the ratio of the corresponding element of bayesian_model to the corresponding element of bayesian_weight
-    Else, keep it unchanged
+Iterator for each element in x:
+  If( the corresponding elements of prior_variance and posterior_variance are greater than 0){
+    Update the corresponding element of posterior_mean using the formula "((prior_mean[i] / prior_variance[i]) + (x[i] / data_variance[i])) * posterior_variance[i]"
+  } Else{
+    Set the corresponding element of posterior_mean to the corresponding element of prior_mean
+  }
 
-  Return x
+Calculate evidence using the formula:
+
+upper = -1 * ((prior_mean[i] - x[i])^2)
+lower = 2 * (prior_variance[i] + data_variance[i])
+first = upper / lower
+second = sqrt(2 * pi) * (prior_variance[i] + data_variance[i])
+evidence[i] = exp(first) / second
+
+Calculate evidence_derivative as the difference between the mean of evidence and evidence_previous
+
+Set evidence_previous equal to the mean of evidence
+
+Calculate chi2_data using the formula chi2_data = sum(((x[i] - posterior_mean[i])^2 / data_variance[i]) for all i in range of N)
+
+If( iterations == 1 ){
+    Set chi2_data_min equal to chi2_data
+}
+
+Iterator for each element in x:
+  Update the corresponding element of model_weight as the product of the corresponding element of evidence and chi2_data
+  Increment the corresponding element of bayesian_weight by the corresponding element of model_weight
+  Increment the corresponding element of bayesian_model by the product of the corresponding element of model_weight and the corresponding element of posterior_mean
+
+If( (chi2_data is greater than N and evidence_derivative is negative) or iterations exceeds max_iterations ){
+    Break the loop
+}
+ENDLOOP
+
+Increment iterations by 1
+
+Iterator for each element in x:
+  Update the corresponding element of model_weight as the product of the corresponding element of initial_evidence and chi2_data_min
+  Increment the corresponding element of bayesian_weight by the corresponding element of model_weight
+  Increment the corresponding element of bayesian_model by the product of the corresponding element of model_weight and the corresponding element of x
+
+Iterator for each element in x:
+  If( the corresponding element of bayesian_weight is greater than 0 ){
+    Update the corresponding element of x as the quotient of the corresponding element of bayesian_model and the corresponding element of bayesian_weight
+  }
 
 EndProcedure
+
+
+sigma procedure:
+sigma is calculated as the median absolute deviation (MAD) of the wavelet detail coefficients of the data, normalized by a constant. 
+This constant is related to the particular distribution of the wavelet coefficients under the assumption of Gaussian white noise. 
+This is a robust way of estimating the standard deviation of the noise. Here is a more in-depth explanation:
+
+dwtn(x, wavelet='db2'): This function applies a Discrete Wavelet Transform (DWT) to the data x using the Daubechies 2 wavelet. 
+The DWT decomposes a signal into approximation and detail coefficients at various scales. For an image, dwtn gives you a dictionary of approximation and detail coefficients along each dimension.
+
+coeffs['d' * x.ndim]: The detail coefficients are extracted. 
+The 'd' represents detail and the multiplication by x.ndim simply creates a string of 'd's of the same length as the number of dimensions in x. 
+For a 2D image, it would be 'dd', indicating detail coefficients along both dimensions.
+
+sigma = numpy.median(numpy.abs(detail_coeffs)) / 0.6616518484657332: 
+The median absolute deviation (MAD) of the detail coefficients is calculated as a robust measure of the spread of the detail coefficients. 
+The MAD is then divided by the constant 0.6616518484657332. 
+This constant is used to scale the MAD estimator to be a consistent estimator of the standard deviation under the assumption of Gaussian white noise.
+This constant is specifically for the Daubechies 2 wavelet.
+
+In general, wavelet transforms are often used in image processing and signal analysis because they provide a multi-resolution analysis, capturing both frequency and spatial information. 
+In this case, the wavelet transform is used as a tool to estimate the noise level in the data, with the assumption that the high-frequency detail coefficients primarily represent noise.
+
+for greater precision, in addition, a logistic comparison kernel should be iterated over the data, centered on each point, and normalized against the entropy maximum for the kernel size,
+and then this value, which respectively will compute the noise similarity of the data(usually a kernel of 7x7 is sufficient) should be multiplied against the specific sigma value at that point
+
+Procedure fabada(data):
+1. Initialize x to data (copy data)
+2. Replace NaN values in x with 0
+
+3. Initialize iteration_counter to 1, N to size of x, max_iterations to 1000
+4. Calculate sigma (noise variance) using an external procedure
+5. Initialize data_variance to sigma^2 (array of same size as x), replace NaN and 0 with 1e-15 in data_variance
+6. Initialize prior_mean, prior_variance, posterior_mean, posterior_variance to x
+7. Initialize initial_evidence, evidence to exp(-0.5 * sqrt(data_variance)^2 / (2 * data_variance)) / (sqrt(2 * pi) * data_variance)
+8. Initialize evidence_previous to mean of evidence
+9. Initialize bayesian_weight, bayesian_model, model_weight to zero arrays of same shape as x
+
+10. Start an infinite loop:
+10-1. perform a convolutional 1d smoothing operation that averages the neighbors of each element, iterating over the values of posterior mean, and placing the product in prior_mean, except first and last.
+10-1-1. if x is 2d, perform 1d smoothing over each row, and 1d over each column.
+10-1-2. for first and last element(for each row and column except the first and last if 2d), perform a reflected averaging, by first averaging the second to last and third from last, and then adding this to the last and dividing the product by 3, performing a likewise operation for the first.
+10-1-3. if x is 2d, add together the products of the row-sequential smoothing and the column-sequential smoothing, and divide the result by 2.
+10-13. Copy posterior_variance to prior_variance
+10-14. For each element in x, if prior_variance[i] > 0, update posterior_variance[i] to (data_variance[i] * prior_variance[i]) / (data_variance[i] + prior_variance[i]), else set to 0
+10-15. For each element in x, if prior_variance[i] and posterior_variance[i] > 0, update posterior_mean[i] to ((prior_mean[i] / prior_variance[i]) + (x[i] / data_variance[i])) * posterior_variance[i], else set it to prior_mean[i]
+10-16. For each element in x, update evidence[i] to exp(-1 * (prior_mean[i] - x[i])^2 / (2 * (prior_variance[i] + data_variance[i]))) / (sqrt(2 * pi) * (prior_variance[i] + data_variance[i]))
+10-17. Update evidence_derivative as difference between mean of evidence and evidence_previous
+10-18. Set evidence_previous to mean of evidence
+10-19. Calculate chi2_data using formula chi2_data = sum(((x[i] - posterior_mean[i])^2 / data_variance[i]) for all i in range of N), if iterations == 1, set chi2_data_min to chi2_data
+10-10. For each element in x, update model_weight[i] to evidence[i] * chi2_data, increment bayesian_weight[i] by model_weight[i], and increment bayesian_model[i] by model_weight[i] * posterior_mean[i]
+10-11. If chi2_data > N and evidence_derivative is negative or iteration_counter > max_iterations, break loop
+10-12. Increment iteration_counter
+
+23. For each element in x, update model_weight[i] to initial_evidence[i] * chi2_data_min, increment bayesian_weight[i] by model_weight[i], and increment bayesian_model[i] by model_weight[i] * x[i]
+24. For each element in x, if bayesian_weight[i] > 0, update x[i] to bayesian_model[i] / bayesian_weight[i]
+
+25. EndProcedure
