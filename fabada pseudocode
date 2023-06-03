@@ -1,0 +1,74 @@
+Procedure numba_fabada(data):
+
+  Initialize x as a zero array of the same shape as data
+  Set x equal to a copy of data
+  Replace NaN values in x with 0
+
+  Set iterations to 1
+  Set N as the size of x
+  Set max_iterations to 1000
+
+  Initialize bayesian_weight, bayesian_model, model_weight, posterior_mean, initial_evidence, evidence, prior_mean, prior_variance, and posterior_variance as zero arrays of the same shape as x
+
+  Set posterior_mean and prior_mean equal to a copy of x
+
+  Calculate the noise variance sigma using an external procedure
+
+  Set data_variance as an array of the same size as x, all elements equal to sigma squared
+  Replace NaN values in data_variance with 1e-15
+  Replace 0 values in data_variance with 1e-15
+
+  Set posterior_variance and prior_variance equal to a copy of data_variance
+
+  Calculate initial evidence and set evidence equal to it
+
+  Initialize evidence_previous as the mean of evidence
+
+  Start an infinite loop:
+
+    For each element in the arrays, excluding the first and the last, set the corresponding element of prior_mean to the average of its neighboring elements in posterior_mean
+    Set the first and the last elements of prior_mean to the average of their immediate neighbors and the neighbors' neighbors in posterior_mean
+
+    Set prior_variance equal to a copy of posterior_variance
+
+    Apply Bayes' Theorem:
+      For each element in the arrays:
+        If the corresponding element of prior_variance is greater than 0:
+          Update the corresponding element of posterior_variance by using the formula "(data_variance[i] * prior_variance[i])/(data_variance[i] + prior_variance[i])"
+        Else, set it to 0
+
+      For each element in the arrays:
+        If the corresponding elements of prior_variance and posterior_variance are greater than 0:
+          Update the corresponding element of posterior_mean by using the formula "((prior_mean[i] / prior_variance[i]) + (x[i] / data_variance[i])) * posterior_variance[i]"
+        Else, set it to the corresponding element of prior_mean
+
+    Calculate evidence using the formula
+
+    Calculate evidence_derivative as the difference between the mean of evidence and evidence_previous
+    Set evidence_previous equal to the mean of evidence
+
+    Calculate chi2_data using the formula
+
+    On the first iteration, set chi2_data_min equal to chi2_data
+
+    For each element in the arrays:
+      Update the corresponding element of model_weight as the product of the corresponding element of evidence and chi2_data
+      Increment the corresponding element of bayesian_weight by the corresponding element of model_weight
+      Increment the corresponding element of bayesian_model by the product of the corresponding element of model_weight and the corresponding element of posterior_mean
+
+    If chi2_data is greater than N and evidence_derivative is negative, or if iterations exceeds max_iterations, break the loop
+    Increment iterations by 1
+
+  For each element in the arrays:
+    Update the corresponding element of model_weight as the product of the corresponding element of initial_evidence and chi2_data_min
+    Increment the corresponding element of bayesian_weight by the corresponding element of model_weight
+    Increment the corresponding element of bayesian_model by the product of the corresponding element of model_weight and the corresponding element of x
+
+  For each element in the arrays:
+    If the corresponding element of bayesian_weight is greater than 0:
+      Update the corresponding element of x as the ratio of the corresponding element of bayesian_model to the corresponding element of bayesian_weight
+    Else, keep it unchanged
+
+  Return x
+
+EndProcedure
