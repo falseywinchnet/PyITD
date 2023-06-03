@@ -36,6 +36,53 @@ THE SOFTWARE.
 """
 #version idk 11/14/2022 this fixes any divide by zero issues
 
+
+"""
+The approach the authors use for the stopping criterion is based on chi-square statistics, where they calculate a chi-square statistic (chi2_data) and the associated PDF. This approach may be perfectly fine in theory, but it's clear that it's causing numerical stability issues in practice.
+
+Given that we're already in a Bayesian setting, one option might be to replace this with a more Bayesian-style criterion. For instance, we could consider stopping the iterations when the posterior distribution has stabilized, as measured by some appropriate distance metric (Kullback-Leibler divergence might be a reasonable choice here).
+
+This kind of approach would go something like this:
+
+Calculate the posterior distribution after each iteration.
+Measure the Kullback-Leibler (KL) divergence between the posterior distributions from successive iterations.
+Stop iterating when the KL divergence drops below some threshold, indicating that the posterior distribution has effectively stabilized.
+The KL divergence between two Gaussian distributions with means µ1, µ2 and standard deviations σ1, σ2 is given by:
+
+python
+Copy code
+def kl_divergence(mu1, mu2, sigma1, sigma2):
+    return np.log(sigma2/sigma1) + (sigma1**2 + (mu1 - mu2)**2)/(2*sigma2**2) - 0.5
+We could then check the KL divergence after each iteration:
+
+kl_divergence = kl_divergence(mu_current, mu_previous, sigma_current, sigma_previous)
+if kl_divergence < threshold:
+    break  # Stop iterating
+
+Implementing this in your code might look something like this:
+
+python
+Copy code
+while 1:
+    # ... existing code ...
+
+    # after calculating new posterior_mean and posterior_variance, 
+    # calculate the KL divergence from the previous iteration
+    if iteration > 0:  # don't calculate KL divergence on the first iteration
+        kl_divergence = kl_divergence(mu_previous, posterior_mean, sigma_previous, posterior_variance)
+        if kl_divergence < threshold:  # threshold is a hyperparameter you'll need to set
+            break
+
+    # store current posterior_mean and posterior_variance for next iteration
+    mu_previous = posterior_mean.copy()
+    sigma_previous = posterior_variance.copy()
+
+    # ... remaining code ...
+Yes, you could initialize mu_previous and sigma_previous to arrays of ones, 
+or you could initialize them as copies of your initial posterior_mean and posterior_variance, prior to entering the loop. Either approach could work.
+
+
+""
 import numpy
 import numba
 import scipy
