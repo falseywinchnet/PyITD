@@ -82,14 +82,14 @@ Yes, you could initialize mu_previous and sigma_previous to arrays of ones,
 or you could initialize them as copies of your initial posterior_mean and posterior_variance, prior to entering the loop. Either approach could work.
 
 
-""
+"""
 import numpy
 import numba
 import scipy
 from pywt import dwtn
 
 @numba.jit(numba.float64[:](numba.float64[:]),cache=True,nogil=True)
-def numba_fabada(data: numpy.ndarray) -> (numpy.ndarray):
+def numba_fabada(data: numpy.ndarray, sigma: numpy.float64) -> (numpy.ndarray):
     x = numpy.zeros_like(data,dtype=numpy.float64)
     x[:] = data.copy()
     x[numpy.where(numpy.isnan(data))] = 0
@@ -110,15 +110,11 @@ def numba_fabada(data: numpy.ndarray) -> (numpy.ndarray):
     prior_mean = numpy.zeros_like(x,dtype=numpy.float64)
     prior_variance = numpy.zeros_like(x,dtype=numpy.float64)
     posterior_variance = numpy.zeros_like(x,dtype=numpy.float64)
-
-    chi2_data_min = N
+    chi2_data_previous = 0
+    chi2_data_derivative_previous = 0
+    tolerance = 1e-15
+    chi2_data_min = 0
     data_variance = numpy.zeros_like(x,dtype=numpy.float64)
-    with numba.objmode(sigma=numba.float64):  # annotate return type
-        coeffs = dwtn(x, wavelet='db2')
-        detail_coeffs = coeffs['d' * x.ndim]
-        sigma = numpy.median(numpy.abs(detail_coeffs)) / 0.6616518484657332 #scipy.stats.gamma.ppf(0.75,0.5)
-        # https://github.com/scikit-image/scikit-image/blob/main/skimage/restoration/_denoise.py#L938-L1008
-        #note: 2d and higher dimension sigmas will require calling the function instead of inlining wavelets
 
     data_variance.fill(sigma**2)
     data_variance[numpy.where(numpy.isnan(data))] = 1e-15
@@ -185,7 +181,13 @@ def numba_fabada(data: numpy.ndarray) -> (numpy.ndarray):
         evidence_previous = numpy.mean(evidence)
 
         # EVALUATE CHI2
-        chi2_data = numpy.sum((x - posterior_mean) ** 2 / data_variance)
+        chi2_data = numpy.sum((x - posterior_mean) ** 2 / data_variance) / N
+        chi2_data_derivative = chi2_data - chi2_data_previous
+        chi2_data_previous = chi2_data  # update for next iteration
+        # Calculate second derivative (rate of change of the first derivative)
+        chi2_data_snd_derivative = chi2_data_derivative - chi2_data_derivative_previous
+        chi2_data_derivative_previous = chi2_data_derivative  # update for next iteration
+
 
 
         if iterations == 1:
@@ -201,7 +203,7 @@ def numba_fabada(data: numpy.ndarray) -> (numpy.ndarray):
             bayesian_model[i] = bayesian_model[i] + (model_weight[i] * posterior_mean[i])
 
 
-        if ((chi2_data > N) and (evidence_derivative < 0)) \
+        if ((chi2_data > 1) and (evidence_derivative < 0) and (chi2_data_snd_derivative< tolerance)) \
                 or (iterations > max_iterations):  # don't overfit the data
             break
         iterations = iterations + 1
