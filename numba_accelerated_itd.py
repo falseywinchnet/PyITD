@@ -208,7 +208,5 @@ def itd_baseline_extract_modified(x: numpy.ndarray):
     z = numpy.arange(x.size, dtype=numpy.float64)
     coeff = custom_splrep(extrema_indices, S)
     baseline = numba_splev(z, coeff)
-    new = numpy.zeros(len(x))
-    new[extrema_indices] = baseline[extrema_indices]
-    return new 
+    return baseline 
     #to get the rotation instead, just subtract the baseline from x
