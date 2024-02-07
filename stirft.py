@@ -46,7 +46,7 @@ def stirft(x:np.ndarray, window:np.ndarray) -> np.ndarray:
     hop_len = 128    
       
 
-    xp = np.zeros(x.size+n_fft-1,dtype=np.float64)
+    xp = np.zeros(x.size+4*hop_len-1,dtype=np.float64)
     xp[(hop_len*2):-(hop_len*2-1)]= x[:]
     xp[0:(hop_len*2)] = xp[(hop_len*2+1):((hop_len*2)*2)+1][::-1]
     xp[-(hop_len*2-1):] = xp[-(hop_len*2-1)*2-1:-(hop_len*2)][::-1]
@@ -160,7 +160,7 @@ def stirft(x: torch.Tensor, window: torch.Tensor) -> torch.Tensor:
   hop_len = 128
 
   # Padding and mirroring
-  xp = torch.zeros(x.size(0) + n_fft - 1, dtype=torch.float64)
+  xp = torch.zeros(x.size(0) + 4*hop_len - 1, dtype=torch.float64)
   xp[(hop_len*2):-(hop_len*2-1)] = x[:]
   xp[0:(hop_len * 2)] = torch.flip(xp[(hop_len * 2 + 1):((hop_len * 2) * 2 + 1)], dims=[0])
 
