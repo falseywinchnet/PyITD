@@ -21,7 +21,7 @@ OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
   Intrinsic Time-Scale Decomposition (ITD). ITD is a patented decomposition method developed under grant.
   NIH/NINDS grants nos. 1R01NS046602-01 and 1R43NS39240-01. 
-  This algorithm is patented US7966156B1 by Frei And Osorio, 2024-10-06 Adjusted expiration
+  This algorithm is patented US-7457756-B1 by Frei And Osorio, 2027-02-16 Adjusted expiration
 
   This adaptation of ITD has been extremely simplified to run fast.
   it may not be numerically accurate or suitable for your uses. 
