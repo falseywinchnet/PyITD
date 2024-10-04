@@ -161,7 +161,7 @@ void itd_baseline_extract(float* data, float* baseline,int length,int* index, bo
 		idx = 0;
 		for (int i = 1; i < length - 1; i++) {
 			if ((((data[i - 1] < data[i]) && (data[i] >= data[i + 1])) ||
-				((data[i - 1].re > data[i]) && (data[i] <= data[i + 1]))) {
+				((data[i - 1] > data[i]) && (data[i] <= data[i + 1]))) {
 				extrema[idx] = i;
 				idx++;
 			}
