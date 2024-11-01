@@ -118,6 +118,8 @@ def itd_baseline_extract_fast(I: np.ndarray, extrema_input:np.ndarray, idx:int):
 #use itd_sine_wrapper to decompose your signal into a set of frequency-governed bands
 #i would appreciate research collaboration and feedback on the effectiveness of this method for decomposition
 #please apply it to your research problems in mechanical engineering and vibrational-data analysis
+#this can be nondeterministic due to some floating point operations caused by very small numbers
+#but the final product usually perfectly sums back up to the input
 
 
 #further research efforts: apply fourier mode decomposition approach
