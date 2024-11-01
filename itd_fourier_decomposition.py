@@ -121,8 +121,45 @@ def itd_baseline_extract_fast(I: np.ndarray, extrema_input:np.ndarray, idx:int):
 #this can be nondeterministic due to some floating point operations caused by very small numbers
 #but the final product usually perfectly sums back up to the input
 
-
-#further research efforts: apply fourier mode decomposition approach
+def fourier_mode_decomposition_valid(rotation):
+    x = np.fft.fft(rotation)
+    a = np.abs(x)
+    half_len = len(a) // 2
+    
+    # Find all peaks in first half (excluding endpoints)
+    peaks = []
+    for i in range(1, half_len-1):
+        if a[i] > a[i-1] and a[i] > a[i+1]:
+            peaks.append((i, a[i]))
+    
+    if len(peaks) < 3:  # Need at least 3 peaks
+        return np.zeros(rotation.size)
+        
+    # Sort peaks by amplitude and get indices
+    peak_indices = [i for i, _ in sorted(peaks, key=lambda x: x[1], reverse=True)]
+    peak_max = peak_indices[0]
+    
+    # Find valid peaks before and after maximum
+    valid_before = [i for i in peak_indices if i < peak_max - 1]
+    valid_after = [i for i in peak_indices if i > peak_max + 1]
+    
+    if not valid_before or not valid_after:
+        return np.zeros(rotation.size)
+        
+    # Use closest valid peaks
+    first_peak = max(valid_before)
+    last_peak = min(valid_after)
+    
+    # Original mode extraction logic
+    mina = first_peak + np.argmin(a[first_peak:peak_max+1])
+    minb = peak_max + np.argmin(a[peak_max:last_peak+1])
+    
+    xn = np.zeros(len(a), dtype=np.complex64)
+    xn[mina:minb] = x[mina:minb]
+    xn[-minb:-mina] = x[-minb:-mina]
+    
+    return np.fft.ifft(xn).real
+    
 
 def fourier_mode_decomposition_any(rotation):
   #note: ths approach does not attempt to find valid peaks.
@@ -210,10 +247,6 @@ def itd_fourier_decomposition(signal: np.ndarray, sample_rate: int):
    print(f"Total decomposition complete: {len(fourier_modes)} Fourier modes extracted over {iteration-1} iterations")
    return final_output
 
-#for fourier mode decomposition:
-#this method will iteratively find all components in a signal
-#their validity is not guaranteed, however, the approach should be correct
-#this can use a lot more memory
 
 def itd_fourier_decomposition_lean(signal: np.ndarray, sample_rate: int):
     """
@@ -262,5 +295,26 @@ def itd_fourier_decomposition_lean(signal: np.ndarray, sample_rate: int):
     print(f"Total decomposition complete: {num_modes} Fourier modes extracted over {iteration-1} iterations")
     return final_output
 
-#this efficient form uses less memory but only uses/holds one mode array per rotation.
+#this method will iteratively find all components in a signal
+#their validity is not guaranteed due to non-deterministic behavior of float operations on very small numbers
+#itd_fourier_decomposition can use a lot more memory but produces all elements
+
+#itd_fourier_decomposition_lean uses less memory but only uses/holds one mode array per rotation.
 #final output structure is : [modes1,rotation1,modesn,rotationn...finalresidual]
+#note: the number of iterations can be large 
+
+#fourier_mode_decomposition_valid produces much more valid isolations but on large signals will never really converge
+
+#overall, the behavior here will be: 
+#residual rotational data is odd, fourier products are even
+#fourier products will resemble a narrowbanded windowing with very sharp dropoff, sometimes
+#residual products will not, and may show some imaging/aliasing
+#additionally, due to the fourier method's reliance on peak availability, the natural ramification is that
+#decomposition will be slightly dc dominated resulting in difficulty finding peaks for lower(later) rotations.
+#as a result the fourier modes tend to be high frequncy dominant and the residual tends to be low frequency dominant.
+#alternating successive decompositions that start high, then low, may alleviate this problem.
+
+#TODO: improve the determinism of this process. At this time, the number of products varies from iteration to iteration.
+#getting this to behave more consistently will provide better utilization of this as an alternative to wavelets.
+#also, wavelets- applying wavelets to this could be interesting
+
