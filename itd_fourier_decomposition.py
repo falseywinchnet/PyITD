@@ -211,4 +211,54 @@ def itd_fourier_decomposition(signal: np.ndarray, sample_rate: int):
 #for fourier mode decomposition:
 #this method will iteratively find all components in a signal
 #their validity is not guaranteed, however, the approach should be correct
+#this can use a lot more memory
 
+def itd_fourier_decomposition_lean(signal: np.ndarray, sample_rate: int):
+    """
+    Full cascade decomposition with iterative ITD and Fourier extraction.
+    Maintains one Fourier mode array per rotation by accumulating modes.
+    Returns alternating [mode, rotation] pairs followed by residual.
+    """
+    current_signal = signal.copy()
+    iteration = 1
+    num_modes = 0  # Keep track of total modes for final print
+    
+    # Initialize modes array to match number of rotations (excluding residual)
+    rotations = itd_fourier_wrapper(current_signal, sample_rate)
+    accumulated_modes = np.zeros((len(rotations)-1,) + signal.shape)
+    
+    has_modes = True
+    while has_modes:
+        has_modes = False
+        modes_this_iter = 0
+        rotations = itd_fourier_wrapper(current_signal, sample_rate)
+        
+        # Extract Fourier modes from each rotation except the residual
+        for idx, rotation in enumerate(rotations[:-1]):  
+            mode = fourier_mode_decomposition_any(rotation)
+            if not np.allclose(mode, 0):
+                has_modes = True
+                modes_this_iter += 1
+                num_modes += 1
+                accumulated_modes[idx] += mode
+                rotations[idx] = rotation - mode
+        
+        if has_modes:
+            print(f"Iteration {iteration}: Found {modes_this_iter} Fourier modes")
+            current_signal = np.sum(rotations, axis=0)
+            iteration += 1
+        else:
+            print("No more Fourier modes found, finalizing decomposition...")
+            # Build final output array with alternating [mode, rotation] pairs
+            final_output = []
+            for i in range(len(rotations)-1):
+                final_output.append(accumulated_modes[i])
+                final_output.append(rotations[i])
+            
+            final_output.append(rotations[-1])  # Add residual
+    
+    print(f"Total decomposition complete: {num_modes} Fourier modes extracted over {iteration-1} iterations")
+    return final_output
+
+#this efficient form uses less memory but only uses/holds one mode array per rotation.
+#final output structure is : [modes1,rotation1,modesn,rotationn...finalresidual]
