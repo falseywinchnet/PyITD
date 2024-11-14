@@ -92,3 +92,24 @@ def get_hypotenuse_for_angle(a, angle):
     return result
 
 #note this method is not terribly accurate
+
+
+
+def alternating_hypotenuse(n):
+    result = 2
+    for i in range(-n, n + 1):
+        if i % 2 == 0:
+            result += hypotenuse(1, i)
+        else:
+            result -= hypotenuse(1, i)
+    return result
+
+result = alternating_hypotenuse(501)
+
+1.02992270744333784525805532892487210720549002136840773040904790299857140 
+rapidly converges to this value as n increases
+
+q = fsum([hypotenuse(1,i) for i in range(0,1500)])
+
+2.962099838667448525500575899002867644893475486302945108515167066137788104
+rapidly converges to this value as i increases
