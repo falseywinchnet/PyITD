@@ -33,47 +33,62 @@ mp.dps = 500  # set precision
 #alternatively we can use the simple cosine rule which is what i have done here.
 
 
-def generate_hypotenuse(n):
-    if n = 1:
-      return 2
-    elif n == 2:
-      a = sqrt(2 + sqrt(2 + sqrt(2+ sqrt(2 + sqrt(2 + sqrt(2))))))
-      return a
-    elif(n==3):
-      a = sqrt(2 + sqrt(2 + sqrt(2+ sqrt(2 + sqrt(2)))))
+mp.dps = 500  # set precision
 
-      return a
-    elif(n==4):
-      a = sqrt(2 + sqrt(2 + sqrt(2 + sqrt(2))))
-      return a
-    elif n == 5:
-      a  = sqrt(2 + sqrt(2 + sqrt(2)))
-      return a 
-    elif n==  6:
-      return sqrt(2 + sqrt(2)))
-    elif n == 7:
-        return sqrt(2) #90 degrees
-    elif n == 8:
-        return 1 - sqrt(2)
-    elif n == 9:
-        return  1 - sqrt(2 + sqrt(2))
-    else:
-      q = n - 8
-      x = 2
-      for _ in range(q):
-          x = 2 + sqrt(x)
-      return 1 - sqrt(x)
-
-
-
-#this yields some interesting consequences:
 def hypotenuse(x, n):
-  value = 2
-  for _ in range(abs(n)):
-       value = 2 + sqrt(value)
-  if n <0:
-      value =2 * (1-  sqrt(value)/2)
-  else:
-      value =  sqrt(value)
-  return x * value
-  #if we assess that n is the degree, and we 
+    value = 2
+    if n < 0:
+        for _ in range(abs(n)):
+            value = 2 + sqrt(value)
+        value = x * sqrt(value)
+    elif n > 0:
+        # First build up the nested expression
+        for _ in range(abs(n)-1):
+            value = 2 + sqrt(value)
+        # Then apply the outer 2 - (nested expression)
+        value = x * sqrt(2 - sqrt(value))
+    else:
+        value = x * sqrt(value)  #simplifies to sqrt(2) for 90 degrees
+    return value
+
+from mpmath import nstr
+
+def get_hypotenuse_for_angle(a, angle):
+    # Determine n based on the angle
+    if angle == 90:
+        return a * hypotenuse(1, 0)
+    
+    n = 1
+    if angle < 90:
+        while angle < 90 / pow(2, n):
+            n += 1
+        n_low, n_high = n - 1, n
+        
+    else:  # For angles greater than 90 (e.g., 135, 157.5, etc.)
+        while 90- (angle -90 )< 90 / pow(2, n):
+            n += 1
+        n = -n
+        n_low, n_high = n, n+1
+
+    # Calculate the low and high angles based on n
+    if n_low == 0: angle_low = 90
+    elif n_low > 0: angle_low = 45 / (2 ** (n_low - 1))
+    elif n_low == -1: angle_low = 135
+    else: angle_low = 180 - (180 - 135) / (2 ** (-n_low - 1))
+
+    if n_high == 0: angle_high = 90
+    elif n_high > 0: angle_high = 45 / (2 ** (n_high - 1))
+    elif n_high == -1: angle_high = 135
+    else: angle_high = 180 - (180 - 135) / (2 ** (-n_high - 1))
+    h_low = hypotenuse(a, n_low)
+    h_high = hypotenuse(a, n_high)
+
+    print("low : wider degree, maps to negative numbers, below zero below 90")
+    print(n_low,angle_low,nstr(h_low))
+
+    print("high: narrower degree, maps to positive numbers, above zero above 90")
+    print(n_high,angle_high,nstr(h_high))
+    result = h_low + ((angle - angle_low)/(angle_high-angle_low))* (h_high-h_low)
+    return result
+
+#note this method is not terribly accurate
