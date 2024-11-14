@@ -113,3 +113,7 @@ q = fsum([hypotenuse(1,i) for i in range(0,1500)])
 
 2.962099838667448525500575899002867644893475486302945108515167066137788104
 rapidly converges to this value as i increases
+
+
+starting with n = 2, if hypotenuse is accumulated, and the product multiplied by four,
+it converges on a value 0.011515007333097505494774556350015552992711456 less than pi
