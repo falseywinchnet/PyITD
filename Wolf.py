@@ -1,4 +1,4 @@
-MIT License Copyright 2024 joshuah rainstar
+#MIT License Copyright 2024 joshuah rainstar
 
 from torch.optim.optimizer import Optimizer
 class Wolf(Optimizer):
