@@ -66,3 +66,80 @@ class Wolf(Optimizer):
                             p.data - adaptive_alpha * update,
                             p.data)
     return loss
+
+
+import torch
+from torch.optim.optimizer import Optimizer
+
+class TigerOptimizer(Optimizer):
+    def __init__(self, model, params, lr=0.01, betas=(0.1, 0.1)): #betas just for the optimizer generator 
+        self.model = model
+        defaults = dict(lr=lr, betas=betas)
+        super().__init__(params, defaults)
+        
+        for group in self.param_groups:
+            for p in group['params']:
+                state = self.state[p]
+                state['p'] = torch.zeros_like(p)
+
+    #somewhere in your training loop:
+    #    def closure():
+     #           optimizer.zero_grad()
+     #           outputs = net(input)
+     #           loss = loss_function(outputs, labels)
+     #           loss.backward()
+    #            return loss
+        
+    def step(self, closure):
+        etcerta = 0.367879441
+        et = 1 - etcerta
+
+        # First compute initial loss and grads
+        loss = closure()
+
+        init_weights = {}
+        init_grads = {}
+        for group in self.param_groups:
+            for p in group['params']:
+                if p.grad is not None:
+                    init_weights[p] = p.data.clone()
+                    init_grads[p] = p.grad.clone()
+
+        for group in self.param_groups:
+            for p in group['params']:
+                if p.grad is not None:
+                    p.data -=  (2/3) * p.grad
+
+        # First step evaluation
+        loss = closure()
+        for group in self.param_groups:
+            for p in group['params']:
+                if p.grad is not None:
+                    p.data -=    2/3*  (p.grad +  init_grads[p])  # Take second step
+        
+        # Second step evaluation
+        rko_grads = {}
+        for group in self.param_groups:
+            for p in group['params']:
+                if p.grad is not None:
+                    rko_grads[p]=  init_weights [p]- (0.25*init_weights [p]+ 0.75* p.data)    #Ralston's 
+        
+        # Process all updates
+        for group in self.param_groups:
+            for p in group['params']:
+                if p.grad is None:
+                    continue
+
+                state = self.state[p]
+                exp_avg = state['p']
+
+                update = exp_avg * et + rko_grads[p] * etcerta
+                state['p'] = exp_avg * et + update * etcerta
+
+                # Reset and apply final update
+                #note: for some types of optimization problems, ADD, do not subtract, the update
+                p.data = init_weights[p] - update * 0.5
+
+                p.grad.zero_()
+
+        return loss
