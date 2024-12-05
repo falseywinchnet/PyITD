@@ -24,6 +24,19 @@ for b2 in range(1, 300):
 for i in range(len(results)):
    print(i+1,", ",mpmath.nstr(results[i],160))
 
+conclusion:
+For the double integral ∫∫ (x^(2/y))/2 dy dx
+with bounds x: [0 to 1], y: [0 to n]
+When n = 2^k - 2 (for any positive integer k)
+The result equals (n/2 - 1) - (k-1)*log(2)
+when n is twice a prime
+the result is  n/2 - log(n/2 + 1)
+n = 3^k - 2, the result is:
+n/2 + log(2) - k*log(3)
+When n = 2(3^(k+1) - 1) for k ≥ 0, the result 
+is n/2 - (k+1)log(3)
+    
+
 1 ,  0.0945348918918356180219868845356508634280095765375199162835193
 1/2 + log(2) - log(3) 
 2 ,  0.306852819440054690582767878541823431924499865639708921557214
