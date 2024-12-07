@@ -143,3 +143,15 @@ class TigerOptimizer(Optimizer):
                 p.grad.zero_()
 
         return loss
+
+optimal learn rate is as follows
+
+self.t = 0
+
+in step:
+t+1(at END, not at beginning!)
+
+lr = 2/(t + 2) - log(2/(t + 2) + 1)
+lr = 2/(t/alpha + 2) - log(2/(t/alpha + 2) + 1)
+alpha = 1 default behavior, <1 more aggressive >1 less aggressive
+suggest try set it to the number of parameters in the current layer
