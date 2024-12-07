@@ -421,7 +421,9 @@ For the integral:
 Where the bounds are:
 x,y,z: 0 to 1
 q,r,s: 0 to n
-The closed form solution is:
--1/8(log(((2n-2)**3)/27) - n)**3
+The closed form solutions:
+    if n is odd and greater than 1:
+-1/8(log(((2*((n+1)/2-2)-2)**3)/3**3) - n)**3
+
     
     
