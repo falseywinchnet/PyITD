@@ -424,6 +424,7 @@ q,r,s: 0 to n
 The closed form solutions:
     if n is odd and greater than 1:
 -1/8(log(((2*((n+1)/2-2)-2)**3)/3**3) - n)**3
-
+if n is even:
+    1/8 (n - 3 log(n+3) + 3*log(3))**3
     
     
