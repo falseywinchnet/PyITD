@@ -425,5 +425,28 @@ q,r,s: 0 to n
 The closed form solution is:
 1/8 (n + log(3^3) - 3 log(n+3))^3
 
-    
-    
+
+for some, however, the closed form is approximal to tanh
+
+For n=2: 1/8(2 + log(3**3) - 3log(2+3))³ = (1 - tanh⁻¹(49/(49+3**3)))³
+
+for n = 4:  1/8(4 + log(3**3) - 3log(4+3))³ = (2 - tanh⁻¹(158/(158+3**3)))³
+
+For n=8: 1/8(8 + log(3**3) - 3log(8+3))³ = (4 - tanh⁻¹(652/(652+3**3)))³
+
+For n=16: 1/8(16 + log(3**3) - 3log(16+3))³ = (8 - tanh⁻¹(3416/(3416+3**3)))³
+
+For n=32: 1/8(32+ log(3**3) - 3log(32+3))³ = (16 - tanh⁻¹(21424/(21424+3**3)))³
+
+for n=64:  1/8(64+ log(3**3) - 3log(64+3))³ = (32- tanh⁻¹(150368/(150368+3**3)))³
+so , we can push the general form further:
+
+1/8(n + log(3**3) - 3log(n+3))³ = (n/2 - tanh⁻¹(x/(x+3**3)))³
+
+2,4,8,16,32
+
+49,158,652,3416,21424
+
+this roughly corresponds to 0.5n3+4.5n2+13.5n
+
+1/8*(n + log(3**3) - 3*log(n+3))**3 = (n/2 - tanh⁻¹( (0.5*n**3 +4.5*n**2 + 13.5*n)/( (0.5*n**3 +4.5*n**2 + 13.5*n)+3**3)))**3
