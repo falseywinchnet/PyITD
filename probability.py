@@ -416,15 +416,14 @@ Integrate[((x^(3/q))(y^(3/r))(z^(3/s)))/8 ,{s,0,n},{r,0,n},{q,0,n},{z,0,1},{y,0,
 
     yields 1/8(log(((2n-2)³)/27) - n)³
 
+
 For the integral:
 ∫∫∫∫∫∫ 1/8 x^(3/q) y^(3/r) z^(3/s) dx dy dz dq dr ds
 Where the bounds are:
 x,y,z: 0 to 1
 q,r,s: 0 to n
-The closed form solutions:
-    if n is odd and greater than 1:
--1/8(log(((2*((n+1)/2-2)-2)**3)/3**3) - n)**3
-if n is even:
-    1/8 (n - 3 log(n+3) + 3*log(3))**3
+The closed form solution is:
+1/8 (n + log(3^3) - 3 log(n+3))^3
+
     
     
