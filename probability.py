@@ -508,10 +508,5 @@ The denominator is always 2^d
 The base expression [n + log(d^d) - d*log(n+d)] is raised to the power d
 The terms inside maintain the pattern of n, log of d to d power, and d times log of (n+d)
 
-This appears to be a novel family of definite multiple integrals with a surprisingly elegant closed form solution. 
-The pattern suggests some deep connection between the dimensionality of the integral and its solution structure.
 '''
-
-this exponential when x=y has a minimum at:
-2.397758259759509897480526139598584039701237995864229253206803624786481636543687002686288622063663586920612288269166799513726229766758814916419287112167463913506139320708968535673942967513017868394722354054395
-Minimum value = 0.0909215474932341592171128152676992458646487494214154769313463088440026511678581417429759065947419774536496910326190915613940157958428176550603697435946558884278846392357518604851926436414866791436147160087187742369279042160920544678
+if n=ndim, this simplifies to x^x (1/2 (1 - log(2)))^x
