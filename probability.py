@@ -359,3 +359,39 @@ log(e/2)
 297 ,  143.492703607169258882556991848082661844827851874754106363552
 298 ,  143.989364705903744249986003975166922448225806599193811878944
 299 ,  144.486036915811069580839036864669149802879279219842271323455
+
+
+
+import mpmath
+mpmath.mp.dps = 32  
+mpmath.mp.prec = 32
+
+def triple_integral_second(a1, a2, b1, b2, c1, c2,d1,d2):
+    def integrand(z, y, x,q):
+        return (((x)**(mpmath.mpf('2')/z))*((y)**(mpmath.mpf('2')/q))) /mpmath.mpf('4')
+        
+
+    result = mpmath.quad(lambda x: 
+             mpmath.quad(lambda y: 
+             mpmath.quad(lambda z: 
+             mpmath.quad(lambda q: integrand(q,z, y, x), [d1, d2]), [c1, c2]),
+             [b1, b2]), 
+             [a1, a2])
+    return result
+
+# Test with fixed bounds for x and y (0 to 1)
+a1, a2 = 0, 1  # x bounds
+b1, b2 = 0, 1  # y bounds
+results = []
+
+# Vary z upper bound
+for c2 in range(1, 300):
+    results.append(triple_integral_second(a1, a2, b1, b2, 0, c2,0,c2))
+    print(f"{c2}, {mpmath.nstr(results[c2-1],160)}")
+#note that this will not run in realistically usable time
+instead, just use the closed form:
+
+for n:
+∫∫∫∫((x^(2/z))(y^(2/q)))/4 dq dz dy dx = 1/4(log(((n+2)**2)/4) - n)**2
+
+
