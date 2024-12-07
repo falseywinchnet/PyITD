@@ -447,3 +447,67 @@ this roughly corresponds to 0.5n3+4.5n2+13.5n
 
 
 of course, tanh⁻¹(a/b) = 1/2(log(a+b)) just in general as long as b is 1 greater than a
+
+for four dimensions:
+Integrate[x*y*z*a,{x,0,sqrt(n)},{y,0,sqrt(n)},{z,0,sqrt(n)},{a,0,sqrt(n)}]
+yields n^4/16
+
+Integrate[((x^(4/q))(y^(4/r))(z^(4/s))(a^(4/t)))/16 ,{s,0,1},{r,0,1},{q,0,1},{t,0,1},{z,0,1},{y,0,1},{x,0,1},{a,0,1}] 
+
+integral_0^1 integral_0^1 integral_0^1 integral_0^1 integral_0^1 integral_0^1 integral_0^1 integral_0^1 1/16 x^(4/q) y^(4/r) z^(4/s) a^(4/t) da dx dy dz dt dq dr ds =
+
+1/16 (1 - 4 log(5) + log(256))^4
+
+8.323659740844868966914319116370252106637402519765632713375955855588490495913893179896444875022797465×10^-6
+
+in accordance with previous rules:
+
+1/16*(n + log(4**4) - 4*log(n+4))**4
+
+furthermore under this consideration we can now refactor:
+
+def single(n):
+  return n/2 - log(n/2 + 1)
+
+def double(n):
+  return 1/4*(n + log(2**2) - 2*log(n+2))**2
+
+def triple(n):
+    return 1/8* (n + log(3**3) - 3 *log(n+3))**3
+
+def quad(n):
+    return 1/16*(n + log(4**4) - 4*log(n+4))**4
+
+
+as such we can predict the general form:
+for any number of dimensions of integration, where each dimension consists of 
+the integration of a[dim] over 0 to 1 and b[dim] 1 to n in the form
+(a[dim^(ndim/b[dim])) * [same expression for all other dim] )/2^ndim
+the closed form will be 1/(2^ndim)*(n + log(ndim**ndim) - ndim*log(n+ndim))**ndim
+
+'''
+For dimension d ≥ 1, consider the integral:
+∫...∫ (∏ᵢ₌₁ᵈ xᵢ^(d/yᵢ))/(2^d) dx₁...dxₓ dy₁...dyₓ
+where:
+
+There are d variables xᵢ each integrated from 0 to 1
+There are d variables yᵢ each integrated from 0 to n
+The product term multiplies all d expressions together
+The whole expression is divided by 2^d
+
+The closed form solution appears to be:
+1/(2^d) * [n + log(d^d) - d*log(n+d)]^d
+This can be verified for the first few dimensions:
+d=1: n/2 - log(n/2 + 1)
+d=2: 1/4 * [n + log(2²) - 2log(n+2)]²
+d=3: 1/8 * [n + log(3³) - 3log(n+3)]³
+d=4: 1/16 * [n + log(4⁴) - 4log(n+4)]⁴
+The pattern follows a clear structure where:
+
+The denominator is always 2^d
+The base expression [n + log(d^d) - d*log(n+d)] is raised to the power d
+The terms inside maintain the pattern of n, log of d to d power, and d times log of (n+d)
+
+This appears to be a novel family of definite multiple integrals with a surprisingly elegant closed form solution. 
+The pattern suggests some deep connection between the dimensionality of the integral and its solution structure.
+'''
