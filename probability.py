@@ -444,3 +444,6 @@ so , we can push the general form further:
 this roughly corresponds to 0.5n3+4.5n2+13.5n
 
 1/8*(n + log(3**3) - 3*log(n+3))**3 = (n/2 - tanh⁻¹( (0.5*n**3 +4.5*n**2 + 13.5*n)/( (0.5*n**3 +4.5*n**2 + 13.5*n)+3**3)))**3
+
+
+of course, tanh⁻¹(a/b) = 1/2(log(a+b)) just in general as long as b is 1 greater than a
