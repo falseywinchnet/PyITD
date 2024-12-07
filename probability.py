@@ -509,4 +509,61 @@ The base expression [n + log(d^d) - d*log(n+d)] is raised to the power d
 The terms inside maintain the pattern of n, log of d to d power, and d times log of (n+d)
 
 '''
-if n=ndim, this simplifies to x^x (1/2 (1 - log(2)))^x
+
+
+
+below this point is unfinished.
+my thought was to try to generalize this to higher powers: stay with me here.
+    We observed initially the inequality that ∫ x from 0 to sqrt(n) yielded n/2
+
+this in turn resulted in the integral x**(mpmath.mpf('2')/y)/mpmath.mpf('2')
+where y serves as the "tracking" dimension
+
+This then in turn got generalized to higher "true" dimensions,
+each with their own "tracking" dimension working over the same range
+and with the logic adjusted for each
+so we arrived at the closed form for these
+
+but what about generalizing in a different direction?
+
+∫ x from 0 to cuberoot(n) yielded n^(2/3)/2
+Integrate[x,{x,0,(n)^(1/3)}] = n^(2/3)/2
+Integrate[x, {x, 0, n^(1/4)}] = sqrt(n)/2
+integral_0^(n^(1/d)) x dx = n^(2/d)/2
+
+
+Integrate[x*y*z,{x,0,(n)^(1/2)},{y,0,(n)^(1/2)},{z,0,(n)^(1/2)}] =  n^(3)/8
+Integrate[x*y*z,{x,0,(n)^(1/3)},{y,0,(n)^(1/3)},{z,0,(n)^(1/3)}] =  n^(6/6)/8
+Integrate[x*y*z,{x,0,(n)^(1/4)},{y,0,(n)^(1/4)},{z,0,(n)^(1/4)}]  = n^(6/4)/8
+Integrate[x*y*z,{x,0,(n)^(1/5)},{y,0,(n)^(1/5)},{z,0,(n)^(1/5)}] = n^(6/5)/8
+
+Integrate[x*y*z*a,{x,0,(n)^(1/3)},{y,0,(n)^(1/3)},{z,0,(n)^(1/3)},{a,0,(n)^(1/3)}] = n^(8/3)/16
+Integrate[x*y*z*a,{x,0,(n)^(1/4)},{y,0,(n)^(1/4)},{z,0,(n)^(1/4)},{a,0,(n)^(1/4)}] = n^(8/4)/16
+Integrate[x*y*z*a,{x,0,(n)^(1/5)},{y,0,(n)^(1/5)},{z,0,(n)^(1/5)},{a,0,(n)^(1/5)}] = n^(8/5)/16
+
+in general, therefore, to integrate the power, we have the term n^(ndim*2/pow)/ndim^2 maybe?
+
+∫∫ (x^(2/y^(1)))/2 dy dx
+Integrate[x,{x,0,(n)^(1/2)}]  n/2
+Integrate[((x^(2/y^(4/r)))/2,{y,0,1},{x,0,1},{y,0,1},{r,0,1}] 
+
+
+
+for the 1d form:
+
+Integrate[(x^(2/(y^(4/3))))/2,{y,0,1},{x,0,1}]  = 
+integral_0^1 integral_0^1 1/2 x^(2/y^(4/3)) dx dy = 1/2 (1 - 2F1(3/4, 1, 7/4, -1/2))≈0.0820501
+Integrate[(x^(2/(y^(4/4))))/2,{y,0,1},{x,0,1}] 
+= integral_0^1 integral_0^1 1/2 x^(2/y^(4/4)) dx dy = 1/2 + log(4) - log(6)≈0.0945349
+Integrate[(x^(2/(y^(4/5))))/2,{y,0,1},{x,0,1}]  = 
+integral_0^1 integral_0^1 1/2 x^(2/y^(4/5)) dx dy = 0.103942
+
+
+integral_0^2 integral_0^1 1/2 x^(2/y^(4/3)) dx dy = 1 - 2F1(3/4, 1, 7/4, -2^(1/3))≈0.310265
+integral_0^2 integral_0^1 1/2 x^(2/y^(4/4)) dx dy = 1 - log(2)≈0.306853
+integral_0^2 integral_0^1 1/2 x^(2/y^(4/5)) dx dy = 0.306802
+
+all of these yield closed form values so i am not sure if i am moving in the right direction but maybe it is correct
+and if these yield closed forms, then a generalization is not only possible but inevitable
+but the amount of work and time involved to explore them and come up with a generalizing formula may be large and not
+necessarily yield useful fruit
