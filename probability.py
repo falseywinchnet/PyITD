@@ -362,6 +362,12 @@ log(e/2)
 
 
 
+
+for the double form:
+
+sqrt(n) -> n^2/4
+yields Integrate[((x^(2/z))(y^(2/q)))/4 ,{q,0,n},{z,0,n},{y,0,1},{x,0,1}]
+
 import mpmath
 mpmath.mp.dps = 32  
 mpmath.mp.prec = 32
@@ -400,3 +406,22 @@ interestingly, double and single forms intersect-
     n ≈ -1.68281132087392127569320931602497221210074262875527933912970017909636816243663400102069134338260803237411200253317589890921833314662835...
 
 4.29238644124116517047412205704273650577732409236497685206923858257355032797509774154879213233808935196904021889258153294370325328008331
+
+
+for the triple form:
+Integrate[x*y*z,{x,0,sqrt(n)},{y,0,sqrt(n)},{z,0,sqrt(n)}]
+sqrt(n) -> n^3/8
+yields 
+Integrate[((x^(3/q))(y^(3/r))(z^(3/s)))/8 ,{s,0,n},{r,0,n},{q,0,n},{z,0,1},{y,0,1},{x,0,1}] 
+
+    yields 1/8(log(((2n-2)³)/27) - n)³
+
+For the integral:
+∫∫∫∫∫∫ 1/8 x^(3/q) y^(3/r) z^(3/s) dx dy dz dq dr ds
+Where the bounds are:
+x,y,z: 0 to 1
+q,r,s: 0 to n
+The closed form solution is:
+-1/8(log(((2n-2)**3)/27) - n)**3
+    
+    
