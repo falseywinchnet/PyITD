@@ -648,3 +648,20 @@ Beyond 2,
 
 Γ(1/4)^2/(2 sqrt(2 π)) aka Lemniscate 
 
+
+we then ask ourselves, what is the gaussian ?
+why, its ((4 * sqrt(2) * Γ(5/4)^2)/π^(3/2)) 
+and the reciprocal follows the same behavior:
+π^(3/2)/(4 sqrt(2) Γ(5/4)^2) = 1/Gga
+
+what about
+evaluating ((4 * sqrt(2) * Γ(5/4)^2)/π^(3/2))  * x = ?
+for 1/pi, the result is sqrt(π/2)/(4 Γ(5/4)^2)
+which is in turn 1/L
+
+1/the lemingscale constant IS the number when multiplied by the constant results in 1/pi
+
+what about:
+((4 * sqrt(2) * Γ(5/4)^2)/π^(3/2))  * x = pi/agm?
+
+π^4/(32 Γ(5/4)^4)
