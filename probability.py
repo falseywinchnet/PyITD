@@ -567,3 +567,22 @@ all of these yield closed form values so i am not sure if i am moving in the rig
 and if these yield closed forms, then a generalization is not only possible but inevitable
 but the amount of work and time involved to explore them and come up with a generalizing formula may be large and not
 necessarily yield useful fruit
+
+
+for the well known integral 2 * integral_0^1 1/sqrt(1 - x^z)) dx
+where z=2 = pi
+
+
+2 integral_0^1 1/sqrt(1 - x^(1/n)) dx = 
+starting with n=2,
+The sequence follows the pattern 2^p/y where:
+p comes from sequence A101925: 4, 5, 8, 9, 11, 12, 16, 17, 19, 20, 23, 24, 26, 27, ...
+y comes from the expansion coefficients of 1/√(1-x) in sequence A001790
+3, 5, 35, 63, 231, 429, 6435, 12155, 46189, 88179, 676039, 1300075, 5014575
+ie, when N=8, the result is 524288/46189
+
+every integer n ≥ 2 gives us one of our rational fractions in sequence.
+an irrational number (π) at n = 1/2=0.5
+an integer (4) at n = 1
+and then rational fractions for all integer n ≥ 2
+
