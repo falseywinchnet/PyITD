@@ -586,3 +586,25 @@ an irrational number (π) at n = 1/2=0.5
 an integer (4) at n = 1
 and then rational fractions for all integer n ≥ 2
 
+For 2 ∫[0 to 1] 1/sqrt(1 - x^(1+1/n)) dx where n is a power of 2:
+First Γ fraction:
+
+Numerator: 2^n + 1
+Denominator: Previous numerator
+
+Second Γ fraction:
+
+Numerator: 3*2^n + 1
+Denominator: 2^n + 2
+
+2 integral_0^1 1/sqrt(1 - x^(1 + 1/2)) dx = (2 sqrt(π) Γ(5/3))/Γ(7/6)≈3.44948
+2 integral_0^1 1/sqrt(1 - x^(1 + 1/4)) dx = (2 sqrt(π) Γ(9/5))/Γ(13/10)≈3.67886
+2 integral_0^1 1/sqrt(1 - x^(1 + 1/8)) dx = (2 sqrt(π) Γ(17/9))/Γ(25/18)≈3.8247
+2 integral_0^1 1/sqrt(1 - x^(1 + 1/16)) dx = (2 sqrt(π) Γ(33/17))/Γ(49/34)≈3.90811
+32 = (2 sqrt(π) Γ(65/33))/Γ(97/66) 
+64 = (2 sqrt(π) Γ(129/65))/Γ(193/130)
+So our full formula for any n ≥ 1 would be:
+2 ∫[0 to 1] 1/sqrt(1 - x^(1+1/n)) dx = (2 sqrt(π) Γ((2^n + 1)/(2^(n-1) + 1)))/Γ((3*2^(n-1) + 1)/(2^(n-1) + 2))
+
+
+all of these results can be re-expressed in some form of π combined with Γ(1/n+1)
