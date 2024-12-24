@@ -625,3 +625,16 @@ So our full formula for any n ≥ 1 would be:
 
 
 all of these results can be re-expressed in some form of π combined with Γ(1/n+1)
+
+
+Beyond 2, 
+
+
+2 integral_0^1 1/sqrt(1 - x^(2 + 1/8)) dx = (2 sqrt(π) Γ(25/17))/Γ(33/34)≈3.08443
+2 integral_0^1 1/sqrt(1 - x^(2 + 1/4)) dx = (2 sqrt(π) Γ(13/9))/Γ(17/18)≈3.03282
+2 integral_0^1 1/sqrt(1 - x^(2 + 2/4)) dx = (2 sqrt(π) Γ(14/10))/Γ(18/20)≈3.03282
+
+2 integral_0^1 1/sqrt(1 - x^(2 + 3/4)) dx = (2 sqrt(π) Γ(15/11))/Γ(19/22)≈2.86822
+2 integral_0^1 1/sqrt(1 - x^(2 + 7/8)) dx = (2 sqrt(π) Γ(31/23))/Γ(39/46)≈2.83506
+2 integral_0^1 1/sqrt(1 - x^(3 + 1/16)) dx = (2 sqrt(π) Γ(65/49))/Γ(81/98)≈2.78986
+2 integral_0^1 1/sqrt(1 - x^(3 + 1/4)) dx = (2 sqrt(π) Γ(17/13))/Γ(21/26)≈2.74935
