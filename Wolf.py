@@ -1,10 +1,23 @@
 #MIT License Copyright 2024 joshuah rainstar
+#Wolf, Tiger, Phoenix optimizers
+#Think of these as three exploratory approaches
+#Wolf is simpler, but often sufficient and sometimes better than adam.
+#Tiger is expensive, but can be useful for fine tuning where accuracy with fewer steps is important.
+#Where you're not going over lots and lots of data, but trying to minimize the damage to an existing model.
+#Pheonix is experimental, and something like Wolf on steroids.
+#it's not optimal and needs both schedulers as well as momentum terms to work when the model's closer to zero.
+#it currently does not converge, but it gets deeper than adam fast and then kind of jumps around a bit.
+#try it on models where you have lots of data and the floor is really, really noisy.
+#so, the way i'd use these is- Phoenix initially, then when model loss levels off- > switch to Wolf/Adam
+#then switch to Tiger with carefully set LR and run microbatches for fine tuning
 
 from torch.optim.optimizer import Optimizer
 class Wolf(Optimizer):
   """Implements Wolf algorithm."""
   #Wolf, also called Rainstar Optimizer, is fast. it is resistant to valleys and other things where adam hangs.
   #on some problems, it is faster than adam. Try a high LR and lower it until it doesnt explode.
+  #wolf is initially smoother than adam over difficult plateaus and at high LR.
+  
 
   def __init__(self, params, lr=0.25, betas=(0.9, 0.999), eps=1e-8):
         # Define default parameters
