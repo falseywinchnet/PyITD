@@ -2,14 +2,17 @@
 #Wolf, Tiger, Phoenix optimizers
 #Think of these as three exploratory approaches
 #Wolf is simpler, but often sufficient and sometimes better than adam.
-#Tiger is expensive, but can be useful for fine tuning where accuracy with fewer steps is important.
+#on FIR filtration coefficient finding, where there's a lot of anistropy, it's good.
+#Tiger is expensive,  basically an efficient second order integrator,
+#but can be useful for fine tuning where accuracy with fewer steps is important.
 #Where you're not going over lots and lots of data, but trying to minimize the damage to an existing model.
+#where the function is smooth. It's actually just an integration wrapped up in an optimizer.
 #Pheonix is experimental, and something like Wolf on steroids.
-#it's not optimal and needs both schedulers as well as momentum terms to work when the model's closer to zero.
-#it currently does not converge, but it gets deeper than adam fast and then kind of jumps around a bit.
-#try it on models where you have lots of data and the floor is really, really noisy.
-#so, the way i'd use these is- Phoenix initially, then when model loss levels off- > switch to Wolf/Adam
-#then switch to Tiger with carefully set LR and run microbatches for fine tuning
+#it currently does not converge well on classifier problems, but it does well on noisy quadratics.
+#its virtue is, depending on the problem, it can converge very quickly to a plateau, and then you let adam/wolf take over.
+
+#In conclusion a finely tuned Adam optimizer is often the correct tool for the job, but when there is uncertainty,
+#or the problem resists learning, try one of these.
 
 from torch.optim.optimizer import Optimizer
 class Wolf(Optimizer):
