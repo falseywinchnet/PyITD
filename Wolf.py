@@ -68,79 +68,75 @@ class Wolf(Optimizer):
     return loss
 
 
+
 import torch
 from torch.optim.optimizer import Optimizer
-
-class TigerOptimizer(Optimizer):
-    def __init__(self, model, params, lr=0.01, betas=(0.1, 0.1)): #betas just for the optimizer generator 
-        self.model = model
-        defaults = dict(lr=lr, betas=betas)
+# 4. Tiger optimizer (Ralston-inspired)
+class Tiger(Optimizer):
+    def __init__(self, model, params, lr=0.01):
+        defaults = dict(lr=lr)
         super().__init__(params, defaults)
-        
+        self.model = model
         for group in self.param_groups:
             for p in group['params']:
-                state = self.state[p]
-                state['p'] = torch.zeros_like(p)
+                # persistent state for smoothing
+                self.state[p]['p'] = torch.zeros_like(p.data)
 
-    #somewhere in your training loop:
-    #    def closure():
-     #           optimizer.zero_grad()
-     #           outputs = net(input)
-     #           loss = loss_function(outputs, labels)
-     #           loss.backward()
-    #            return loss
-        
     def step(self, closure):
         etcerta = 0.367879441
-        et = 1 - etcerta
+        et = 1.0 - etcerta
+        lr = self.param_groups[0]['lr']
 
-        # First compute initial loss and grads
+        # 1) initial forward+backward
         loss = closure()
 
-        init_weights = {}
-        init_grads = {}
-        for group in self.param_groups:
-            for p in group['params']:
-                if p.grad is not None:
-                    init_weights[p] = p.data.clone()
-                    init_grads[p] = p.grad.clone()
-
-        for group in self.param_groups:
-            for p in group['params']:
-                if p.grad is not None:
-                    p.data -=  (2/3) * p.grad
-
-        # First step evaluation
-        loss = closure()
-        for group in self.param_groups:
-            for p in group['params']:
-                if p.grad is not None:
-                    p.data -=    2/3*  (p.grad +  init_grads[p])  # Take second step
-        
-        # Second step evaluation
-        rko_grads = {}
-        for group in self.param_groups:
-            for p in group['params']:
-                if p.grad is not None:
-                    rko_grads[p]=  init_weights [p]- (0.25*init_weights [p]+ 0.75* p.data)    #Ralston's 
-        
-        # Process all updates
+        # 2) snapshot weights and initial gradients
+        init_w = {}
+        g0     = {}
         for group in self.param_groups:
             for p in group['params']:
                 if p.grad is None:
                     continue
+                init_w[p] = p.data.clone()
+                g0[p]     = p.grad.clone()
 
-                state = self.state[p]
-                exp_avg = state['p']
+        # 3) Ralston stage 1: x1 = x0 - (2/3)*lr * g0
+        for p, grad0 in g0.items():
+            p.data = p.data - (2/3) * lr * grad0
 
-                update = exp_avg * et + rko_grads[p] * etcerta
-                state['p'] = exp_avg * et + update * etcerta
+        # 4) second forward+backward to get g1
+        loss = closure()
+        g1 = {}
+        for group in self.param_groups:
+            for p in group['params']:
+                if p.grad is None:
+                    continue
+                g1[p] = p.grad.clone()
 
-                # Reset and apply final update
-                #note: for some types of optimization problems, ADD, do not subtract, the update
-                p.data = init_weights[p] - update * 0.5
+        # 5) Ralston stage 2: x2 = x1 - (2/3)*lr * (g0 + g1)
+        for p in g1:
+            p.data = p.data - (2/3) * lr * (g0[p] + g1[p])
 
-                p.grad.zero_()
+        # 6) compute Ralston residual: rko = x_R - x0
+        #    where x_R = x0 + lr*(¼·k1 + ¾·k2)
+        #    but since we mutated p.data in place, do:
+        rko = {}
+        for p, w0 in init_w.items():
+            # current p.data == x2
+            rko[p] = w0 - (0.25 * w0 + 0.75 * p.data)
+
+        # 7) Wolf‐style smoothing + final update
+        with torch.no_grad():
+            for p in init_w:
+                state_p = self.state[p]['p']
+                update  = state_p * et + etcerta * rko[p]
+                new_st  = state_p * et + etcerta * update
+                # final step: subtract the entire smoothed residual
+                p.data  = init_w[p] - update
+                # save new persistent state
+                self.state[p]['p'] = new_st
+                # clear grads
+                p.grad = None
 
         return loss
 
