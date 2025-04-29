@@ -3,6 +3,8 @@
 from torch.optim.optimizer import Optimizer
 class Wolf(Optimizer):
   """Implements Wolf algorithm."""
+  #Wolf, also called Rainstar Optimizer, is fast. it is resistant to valleys and other things where adam hangs.
+  #on some problems, it is faster than adam. Try a high LR and lower it until it doesnt explode.
 
   def __init__(self, params, lr=0.25, betas=(0.9, 0.999), eps=1e-8):
         # Define default parameters
@@ -55,15 +57,12 @@ class Wolf(Optimizer):
         update = exp_avg * et + grad * etcerta
         state['p']  = exp_avg * et + update * etcerta
         sign_agreement = torch.sign(update) * torch.sign(grad)
-        # The value to use for adaptive_alpha depends upon your model.
-        #in general, test and set it as high as you can without it exploding
-        #it may favor a backoff where it starts small and then gets larger as the model converges on the global minimum
-        
-        adaptive_alpha = self.lr
+
+        update = update + (torch.rand_like(update)*2 - 1) * etcerta * update
         # Where signs agree (positive), apply normal update
         mask = (sign_agreement > 0)
         p.data = torch.where(mask, 
-                            p.data - adaptive_alpha * update,
+                            p.data - self.lr * update,
                             p.data)
     return loss
 
@@ -72,6 +71,8 @@ class Wolf(Optimizer):
 import torch
 from torch.optim.optimizer import Optimizer
 # 4. Tiger optimizer (Ralston-inspired)
+#convergence tends to be slower than most. but, for simpler problems, this is the most efficient way to "jump" the landscape
+#use this where you'd use SGD and try a high LR.
 class Tiger(Optimizer):
     def __init__(self, model, params, lr=0.01):
         defaults = dict(lr=lr)
@@ -145,32 +146,37 @@ from torch.optim.optimizer import Optimizer
 
 class Phoenix(Optimizer):
     """
-    M-order leaky-integrator optimizer with elementwise directional + magnitude confidence weighting,
-    and optional sign-gating based on the smallest integrator's immediate signal.
+    M-order leaky-integrator optimizer with per-order decaying integrator rates,
+    elementwise directional + magnitude confidence, and optional noise.
+    fast, clean initial convergence, but noisy deep down and unable to converge.
+    a LR scheduler may help here.
     """
-    def __init__(self, params, lr=1e-2, etcerta=0.367879441, M=7, noise_scale=0.367879441, eps=1e-6):
-        defaults = dict(lr=lr, etcerta=etcerta, M=M, noise_scale=noise_scale, eps=eps)
+    def __init__(self, params, lr=1e-2, M=7, noise_scale=0.0, eps=1e-6):
+        defaults = dict(lr=lr, M=M, noise_scale=noise_scale, eps=eps)
         super().__init__(params, defaults)
+        # precompute per-order integrator rates: etcerta_i = 1/e^(i+1), et_i = 1 - etcerta_i
         for group in self.param_groups:
-            group['et'] = 1.0 - group['etcerta']
+            M = group['M']
+            etc_list = [math.exp(-(i+1)) for i in range(M)]
+            group['etc_list'] = etc_list
+            group['et_list']  = [1.0 - etc for etc in etc_list]
             for p in group['params']:
                 # initialize M integrator states per parameter tensor
-                self.state[p]['I'] = [torch.zeros_like(p.data) for _ in range(group['M'])]
+                self.state[p]['I'] = [torch.zeros_like(p.data) for _ in range(M)]
 
     def step(self, closure=None):
-        """Performs a single optimization step with per-element confidence."""
+        """Performs a single optimization step with per-order decaying integrators."""
         loss = None
-        # forward/backward to populate gradients
         if closure is not None:
             loss = closure()
 
         for group in self.param_groups:
-            lr = group['lr']
-            etc = group['etcerta']
-            et  = group['et']
-            M   = group['M']
+            lr          = group['lr']
+            M           = group['M']
             noise_scale = group['noise_scale']
-            eps = group['eps']
+            eps         = group['eps']
+            etc_list    = group['etc_list']
+            et_list     = group['et_list']
 
             for p in group['params']:
                 if p.grad is None:
@@ -179,38 +185,40 @@ class Phoenix(Optimizer):
                     # raw gradient step
                     u = lr * p.grad.data
 
-                    # capture previous integrator states
+                    # update M-order integrators with per-order rates
                     I = self.state[p]['I']
-                    old_I = [i.clone() for i in I]
+                    # first integrator takes raw u
+                    etc0 = etc_list[0]
+                    et0  = et_list[0]
+                    I[0].mul_(et0).add_(etc0 * u)
 
-                    # build list of stage contributions
-                    contributions = []
-                    # stage 0 contribution
-                    contrib0 = etc * u
-                    contributions.append(contrib0)
-                    I[0].mul_(et).add_(contrib0)
-
-                    # deeper stages
+                    # deeper integrators cascade previous state
                     for i in range(1, M):
-                        contrib = etc * old_I[i-1]
-                        contributions.append(contrib)
-                        I[i].mul_(et).add_(contrib)
+                        etc_i = etc_list[i]
+                        et_i  = et_list[i]
+                        I[i].mul_(et_i).add_(etc_i * I[i-1])
 
-                    # compute elementwise confidence using all I states
+                    # build stack for confidence
                     stack_I = torch.stack(I, dim=0)
                     mean_I  = stack_I.mean(dim=0)
+                    # directional: fraction of states with same sign as mean
                     signs   = (stack_I.sign() * mean_I.sign()).gt(0).float()
                     dir_conf = signs.mean(dim=0)
+                    # magnitude: inverse spread
                     abs_I   = stack_I.abs()
-                    mag_conf = 1.0 / (abs_I.amax(dim=0) - abs_I.amin(dim=0) + eps)
+                    spread  = abs_I.amax(dim=0) - abs_I.amin(dim=0)
+                    mag_conf = 1.0 / (spread + eps)
+                    # combined confidence
                     conf    = 0.5 * (dir_conf + mag_conf)
 
-                    # new update = mean of contributions
+                    # new update: mean of each stage's contribution (= etc_i * input_i)
+                    contributions = [etc_list[0] * u] + [etc_list[i] * I[i-1] for i in range(1, M)]
                     update = sum(contributions) / M
+                    # optional multiplicative noise
                     if noise_scale > 0.0:
                         update = update + noise_scale * (2*torch.rand_like(update)-1) * update
 
-                    # sign gating from fastest integrator
+                    # gate by fastest integrator sign
                     sign_small = I[0].sign()
                     gated = torch.where(sign_small * update.sign() > 0,
                                         conf * update,
@@ -218,5 +226,5 @@ class Phoenix(Optimizer):
 
                     # apply update
                     p.data.add_(-gated)
-
         return loss
+
