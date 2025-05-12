@@ -1290,3 +1290,491 @@ losses= []
 in this paradigm, we combine, perhaps also offer a reward of discounted times some smaller amount-
 but we reward baby for babbling
     
+Baby’s reply tokens:
+xNu
+ccmcU-nWTcLtDnOcW-,WcNcT-NW,WcacWmuc
+NLtmtcN,cp-
+mcutzDnOcnc
+tmuc,-t-LNOzcWm,c,WmWcTpO,cFmc,c
+tSDDMnyHcUneBfU cnnnKDfWNWc,cWNutOcjN
+-OFpuWOcWW-
+mcWmcumNOcLcWmumzDfcucWN
+cFN,,
+mcT-NW,cFmcWcLcNLtc
+cO,DjcTmccLmc,NGmccutmuc&pnG-LNWNTcFmcFucpNW,DIccjN
+-OFp
+Reward from continuation = 0.26953125, Final loss = 3.8543
+[Epoch 1] loss = 3.8543
+Baby’s reply tokens:
+jcgh.&UffM;xNnWctNWcO,-
+
+cFm,,mucc,WmuuOcWNaa-xmOOD;Ux,-
+c,WmcWmNNmxOzcmxNW-xNcmNu,WuOcNcctcWNazffttcNxc-TTcu,N
+c,-,
+mc,ccWcpucnucWxOffMnyHcUneBfU cnnMf.mc,WNxGcWcpcFc,WMcWm,ccxmcFp,cm
+N,,muOcpOzffOcWm
+
+cNaamNum,WcFWc,WmcnNpOmcWcpcncTmDfyNTm
+Wc,ccNaamN
+cm
+Reward from continuation = 0.2265625, Final loss = 3.8461
+[Epoch 2] loss = 3.8461
+Baby’s reply tokens:
+H&UhMxM;gNxWcWmNuOcamcWNaaWctNWOcFmmN
+;gWcNuNn-apOcOaNmum-NxzcTWcTaO,c
+aN-xNc
+-mNmO;;IBhgfjcgh.&UffM;xNnWctNWcO,-
+
+cFm,,muca,WmuuOcWNaa-xmOOD;Ux,-
+c,WmcWmNNmxOzcmxNW-xNcmNu,WuOcNaatcWNaz;fttcNxc-nnau,N
+c,-,
+mc,acWapucnuaWxO;;MnyHcUneBfU cnnM;.mc,WNx;cWapc
+Reward from continuation = 0.26171875, Final loss = 3.7089
+[Epoch 3] loss = 3.7089
+Baby’s reply tokens:
+;Taum naTmaunN 
+m OaunM -m TW Oa  Wmum TW WpO N tz n;OWap
+t mumm
+-mu umNa-nm -  nWNn N Om nm WWmum-  Wm;Wa  Wa apu nWN  -  nWm mT uNnmTm nO am W-O  mt WWmum;Wm Wap
+t OWaW TaOn 
+a mS .Wm  Wmn Wm WNO  pn;nm tmu  at-mt N t nWm a 
+W Oa  am TW WaT z WWm ;WapnW
+Reward from continuation = 0.26953125, Final loss = 3.5446
+[Epoch 4] loss = 3.5446
+Baby’s reply tokens:
+t
+manOz   tz n n - nz maunW naums  
+
+  um n tamuO - 
+apu nu tmz   t  um  aW jmau n m PautjO O nmFj
+
+f&BhUjhyM
+j-uu  z  u-   & u  ut- m  -n muF
+
+mhgmxfM
+g Onmu & u  ut- mO Wap npOn u-Om   t  m     mtF
+g Onmu & u  ut- mO
+
+f&BhUjhyM
+.  nz  az & u  ut- mO
+
+&f
+Reward from continuation = 0.28125, Final loss = 3.5071
+[Epoch 5] loss = 3.5071
+Baby’s reply tokens:
+  an    t n nm
+I m a m  W n m an muF
+
+ehpnynUjM
+.m
+
+z a  na n m n unmn a
+ nmF
+
+ehUnhPfyUjM
+. am mu    m n  n nap Om
+z na  - m maun 
+I m nau  au n m Onaum apOm  u n-Oz  O unW O pOmt
+janmn-nm -  Qummnmz  
+
+pZyZynUjM
+.m
+
+z Wm
+
+z  a naum am n  nF
+
+ehUnhPfyUjM
+Reward from continuation = 0.30859375, Final loss = 3.4092
+[Epoch 6] loss = 3.4092
+Baby’s reply tokens:
+, Q- m nm nW 
+a   eWautz  aO
+
+Pf f efmUPaIM
+f nu nn z   nu nn O W W n 
+
+ Wa  mau   eWaut,
+
+efmUPaIM
+pW eWautz n e WO h
+t pa n   m -e nanmz
+f t m
+a u-e me  -e  
+ tm -  ea-nm am nmF
+
+phyIfQUaM
+I a   -
+
+ -  e a 
+mnz  Ba
+t nm  anz 
+mn nm  aF
+
+Pf f ph IfQUaM
+I
+Reward from continuation = 0.28515625, Final loss = 3.3517
+[Epoch 7] loss = 3.3517
+Baby’s reply tokens:
+ -n-mm nuaW ut W-n  n ums nau a m  m-   e mt naM a m n  n   n 
+W e mes nau a m n  n enau ut  n nmM  aW enau ut am nms nau a m  m-   mm uut am  
+
+M  aW mm u-   a ms nau a m nann  t-    
+
+M a mWut am  a mj I  e   n  n m na uem am N en-nm W mm
+ut   a nM   t 
+Reward from continuation = 0.29296875, Final loss = 3.2016
+[Epoch 8] loss = 3.2016
+Baby’s reply tokens:
+  aWM nu
+
+ nm
+
+ n mm  e Wm a ees   n n -e n au WM I  n n a  na em n na n uuW  e na t WF  nUn U   UUa eaM na
+W j - n nu  n-eM W  n   n    m -e  mumO ne Uae 
+- mM W an n a  t-ten 
+a m ea tm uM ja eaa  maue nm , Wa    nm ue 
+a m n m  
+-me  an nu 
+W -  n m-u 
+Reward from continuation = 0.30078125, Final loss = 3.1254
+[Epoch 9] loss = 3.1254
+Baby’s reply tokens:
+ ena eF  n ren e n Ie M nm n n en  anM n  eet  an  e   rre  am  nn e n a e   e   n  m  
+neM W n  e ua
+ eM na n ue    ueaen n a F .  n e a ne  ue n eee, I e an eu e te au n e n nW  e u ee M W W en W We au n     eue, na n e e a na
+O   
+
+M eaneM naneF  n ren
+Reward from continuation = 0.31640625, Final loss = 3.0650
+[Epoch 10] loss = 3.0650
+Baby’s reply tokens:
+ n aW e   e a rn  e  e n  em e enW na n e aeaa
+eF
+
+ 
+
+M
+ee n aWunM We n aWunF
+
+n ren e n Ie M
+ en  e n 
+
+   nM   t Weu
+
+    e nar   n a r aW  ar neF
+neun    ert nn,
+
+ 
+
+M
+ a nare n 
+n    a un  
+en  n  e ta eM  W yM  W yO
+
+ ena t e n Ie M
+h e WartM  aat n 
+Reward from continuation = 0.3203125, Final loss = 2.9629
+[Epoch 11] loss = 2.9629
+Baby’s reply tokens:
+ee   aW   e ea ue ea  e a 
+t teenuaW   e ea eM
+ uan  aun  n W ue n   e Wa 
+t    e 
+  t n W e  neM
+ eaae    n ee  e aue n a  Weun aaeeeeeutM
+e  n   un aaeeeeeut  aW na teaaee n Wee
+ F
+e WM na e  M Weun n a  ue e n a  n e Wau
+tM  n Weue   e  ne na 
+en n  e 
+Reward from continuation = 0.328125, Final loss = 2.9148
+[Epoch 12] loss = 2.9148
+Baby’s reply tokens:
+a e nre n  er e ee Ia nW  nle    n e r ea eree n ll n e  ren r F e  n     er e ee Were n ereM n e      er  e t  I e  r   n eee a   er n een Wa lt e  ne n aee en reM  e t  l   n tan    l na   er e ee     e  e  ea lt n ua    n e   u  ue  a  enue n ea  u   n
+Reward from continuation = 0.30859375, Final loss = 2.7890
+[Epoch 13] loss = 2.7890
+Baby’s reply tokens:
+  ne re Were  ran n e  ra  tF
+ an e   e na t  n e  , W  n  e n  n na ne
+aare n    na t n na t    ar n e eel e ne  e  e 
+I  n  raW e a  ne laane e tl   aa    nF
+
+ ht h MM
+ rn,  rn, n  lart  n e  ae     ne    n e   eltF
+
+M    t en t     M
+eane,   enle,   en
+Reward from continuation = 0.28515625, Final loss = 2.8486
+[Epoch 14] loss = 2.8486
+Baby’s reply tokens:
+eWeen n    e   t ne r     n e IaWer,
+  t  tW rt, n  aaar ea ,  n IeWne  r F
+
+  h e  I tM
+ re  a  Were t ee ,  e , ar  a r   e   t n   ,
+  W e   a nn  aree      e  re n      re 
+  Weeter a n a    e ara t  t ere r ee,
+  l  er l reW rter a    e  r e teM
+Ia r
+Reward from continuation = 0.33203125, Final loss = 2.6548
+[Epoch 15] loss = 2.6548
+Baby’s reply tokens:
+aler na  ie ainy,   n eelut  e are  ins
+uIW e  ery   i nly  e e it utieesu tienieeut ne
+I  e, Win   ie eaeen leee    tM W  n  e Wa lt ta,
+ne ee n i  Wrini     ner nes W  n  e Wa lt  an,
+&a  t Win     a n  na yielt na  ie na tinia eM
+ a n  n  ll  aae ie   
+Reward from continuation = 0.328125, Final loss = 2.5774
+[Epoch 16] loss = 2.5774
+Baby’s reply tokens:
+ns,
+ aW  ar n e re els W in  sn  t a n i   rel  t,
+  aetie n n    e n sn  e n te, ny lie e,
+ re   rn er leis re yielt n en   rn er ne  s
+ ar n eir  t   n  e   t ya r  i   essu lass,
+
+J    t en t    M
+ee Will a rsel  i  aersa  na n is W rM
+  t,  ar a r na 
+Reward from continuation = 0.33203125, Final loss = 2.5411
+[Epoch 17] loss = 2.5411
+Baby’s reply tokens:
+  in  e  an naa n n M  ri  s  u
+ innary i   is aanten, n e wa  ts  enane  in,
+
+ h  a  
+M
+h us  rawsM ae e i s,  e nanes n e n irt nine  ane
+win  n e a te    rl  t,
+
+aa a    M
+n s  e tisniali et 
+  iti s sa  tly,
+
+ h  a  
+M
+Iin s   rni s wrines, n ey  a   
+Reward from continuation = 0.33203125, Final loss = 2.6017
+[Epoch 18] loss = 2.6017
+Baby’s reply tokens:
+  ya   er n  us,
+
+ t  e ana s na n i e eyes, ay sanenine  e er l,
+     e see  n ee snen,   t n a    sn a n  e elt
+ne rn   rte i   saenn nless nell n ese s t wane 
+uIis  a t na w il i e in  le snrates,
+
+s unis na l      n uen, ay nan er, ya  wan well
+ay   
+Reward from continuation = 0.35546875, Final loss = 2.3565
+[Epoch 19] loss = 2.3565
+Baby’s reply tokens:
+  in , sane nern i  tre s af na snie ne  re yen
+win i  ne,
+
+ irsn a rtererM
+Renen er a r rew rt, w e  n e teet is ta e,
+
+ ena t a rtererM
+ufa  ts,  e tiesM     t far an n e rew rt,
+
+ irsn a rtererM
+e ere is n y na snie ne  aw,
+
+ ena t a rtererM
+   n e   t
+Reward from continuation = 0.34765625, Final loss = 2.3204
+[Epoch 20] loss = 2.3204
+Baby’s reply tokens:
+n  s,
+
+s aaisana s af ya r  ana rM nas a r s in
+ s n  n ya  renannile n enM w ile n e 
+alsnes
+a y s y uI is nerny we    e s awutsu n e Ran ns,
+uI is we renei etsu  nt e n  in ein er site
+ i e n e  ll   il na n ee  nt nry u&e  lesn
+ ar n tin   a n is ae ne
+Reward from continuation = 0.29296875, Final loss = 2.2949
+[Epoch 21] loss = 2.2949
+Baby’s reply tokens:
+
+sa  ana r  le    r  e  s na sn ff    ann erus
+n s ian, ar na  e ennan et in  n  ssus a nt 
+s ttle, een ya  n sn  e s yin , a rni s is ara ts
+w a in   n e a esnin nian, is warn  aretenessars
+sinne  e n lian, n a    aer t enn re sane af n e
+ esn af uen wer
+Reward from continuation = 0.3359375, Final loss = 2.1759
+[Epoch 22] loss = 2.1759
+Baby’s reply tokens:
+ f ir  raunt
+  nault  e n farny af n en,
+
+eha   iud
+  nault nyself
+I te ua    r ne au n e  esn af n ens ye , n e
+nwa nri unesd
+&un naw unis atts  eyant  rin nenins
+
+nt n n aat is n llut faalery, w en in sn nts
+
+  insn   f llin  f  rin, eill yau  enne,
+&ef
+Reward from continuation = 0.37109375, Final loss = 2.1312
+[Epoch 23] loss = 2.1312
+Baby’s reply tokens:
+ ll  i e in na yaur t u  ner,
+ f      e tillut n e issue af yaur wan ,
+Ia tuinten yaur innre se,   will  e en
+aine issue af yaur  laat uaan yaur t u  ner
+
+  r nt nus n ne is linnle less in la e
+I  n is n e tanin  ninle af   nan ers
+I ey  re  s n iltren  u
+Reward from continuation = 0.35546875, Final loss = 1.9486
+[Epoch 24] loss = 1.9486
+Baby’s reply tokens:
+a net  n n,
+han sa  i   s   raunt linnle warn
+mrintut fran n e l Iy fin er af   n its
+ner n  rian is  n enany   Iel nun
+a te  y n e bainer stuirrel ar alt  ru ,
+Iine aun au nint n e f iriesu na n n ters,
+
+nt in n is sn ne s e   llaas ni  n  y ni  n
+I rau 
+Reward from continuation = 0.34765625, Final loss = 1.9805
+[Epoch 25] loss = 1.9805
+Baby’s reply tokens:
+ul nian,
+
+aihih iud
+e  n is  r nnet n emr
+
+a
+RC iud
+ni e nri unes na tefent n eir  ul  r wistams,
+hf n eir awn n ained aneus ounius &runus,
+uininius 
+elunus,  nt   tnaw nan  uute n e
+I e r   le s ault    e firsn unraafut n e niny,
+ire sa are  ilut win  me
+Reward from continuation = 0.3046875, Final loss = 2.0768
+[Epoch 26] loss = 2.0768
+Baby’s reply tokens:
+e  u rd  e n me no mes  nd did nurse
+
+  insn n e 
+olsnes, for n ey   d so  ilely
+eielded n e nownd  e is renired na 
+nnium,
+
+ehR he
+ iud
+uaate  e af mer
+
+e
+Ri iud
+ne did, my lard,
+
+ChR he
+ iud
+nawr w  nr
+
+e
+Ri iud
+naw afnen  e   d men yau, sward na swards
+Reward from continuation = 0.35546875, Final loss = 2.0376
+[Epoch 27] loss = 2.0376
+Baby’s reply tokens:
+  
+e s  is  re n  nnesnor,
+
+unenhniud
+hne n us desnended,
+i  n   n   eside well in  is aerson wrou  n
+io  e sen  i   in alane, we did nommend
+io your remem rannesd  un you  a e found,
+unalin   is aresenn  earin  win   is aasn,
+i an  eus your fi ed enemy, 
+Reward from continuation = 0.3515625, Final loss = 1.7679
+[Epoch 28] loss = 1.7679
+Baby’s reply tokens:
+madua, nursery of arns,
+n am arri ed for fruinful eom ardy,
+i e aleasann  arden of  rean nnalys
+
+nd  y my fan erus lo e and lea e am armud
+ein   is  ood will and n y  ood nomaany,
+ay nrusny ser ann, well aaaro ed in all,
+nere len us  rean e and  aaly insn
+Reward from continuation = 0.3515625, Final loss = 1.7039
+[Epoch 29] loss = 1.7039
+Baby’s reply tokens:
+ nate me win  you, nate me win  you, wife,
+nowe will s e noner don  s e non  i e us n antsr
+ns s e non aroudr don  s e non nounn  er  lesn,
+inworn y as s e is, n an we  a e wrou  n
+uo worn y a  ennleman no  e  er  ride roomr
+
+oieniid
+hon aroud, you  a es 
+Reward from continuation = 0.3359375, Final loss = 1.6975
+[Epoch 30] loss = 1.6975
+Baby’s reply tokens:
+alla ris; len n e world slided sessaR
+
+nosnessd
+eou will non aay for n e glasses you  a e  ursnr
+
+ueed
+ho, non a denier, Ho  y, oeronimyd go no n y nold
+ ed, and warm n ee,
+
+nosnessd
+n tnow my remedy; n musn go fenn  n e
+n ird   oroug ,
+
+ueed
+i ird, or fo
+Reward from continuation = 0.359375, Final loss = 1.6787
+[Epoch 31] loss = 1.6787
+Baby’s reply tokens:
+es y, we nome, eords, will you go win  usr
+
+Rn
+iRud
+aadam, we will annend your grane,
+
+HehiCiuTiRd
+n do n e wrong, and firsn  egin no  rawl,
+T e senren misn iefs n an n sen a roan 
+n lay unno n e grie ous n arge of on ers,
+Clarenne, w om n, indeed,  a e l
+Reward from continuation = 0.359375, Final loss = 1.5779
+[Epoch 32] loss = 1.5779
+Baby’s reply tokens:
+n
+
+ hRTnia&iRe
+  d
+eell, lords, n e  ute of eannasner is dead,
+
+ehR  Rhuud
+
+nd li ing noo; for now  is son is dute,
+
+ehR  eneehiHn&fd
+&arely in ninle, non in re enue,
+
+ hRTnia&iRe
+  d
+Rin ly in  on , if gusnine  ad  er rig n,
+
+ehR  Rhuud
+ay  earn is grean
+Reward from continuation = 0.33203125, Final loss = 1.9075
+[Epoch 33] loss = 1.9075
