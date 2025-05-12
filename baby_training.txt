@@ -1,0 +1,1292 @@
+GOO GOO GAA GAA?
+
+GPL/MIT Rainstar
+Baby training approach
+import torch
+import torch.nn.functional as F
+import random
+
+device = "cpu"
+
+class SuffixAutomaton:
+    class State:
+        __slots__ = ('length','link','next','end_positions')
+        def __init__(self):
+            self.length = 0
+            self.link = -1
+            self.next = {}              # transitions: token -> state_id
+            self.end_positions = set()  # all end positions of substrings
+
+    def __init__(self, data):
+        self.data = data
+        self.states = [self.State()]
+        self.last = 0
+        for i, c in enumerate(data):
+            self._extend(c, i)
+
+    def _extend(self, c, pos):
+        p = self.last
+        curr = len(self.states)
+        st = self.State()
+        st.length = self.states[p].length + 1
+        st.end_positions.add(pos)
+        self.states.append(st)
+        while p >= 0 and c not in self.states[p].next:
+            self.states[p].next[c] = curr
+            p = self.states[p].link
+        if p == -1:
+            st.link = 0
+        else:
+            q = self.states[p].next[c]
+            if self.states[p].length + 1 == self.states[q].length:
+                st.link = q
+            else:
+                clone = len(self.states)
+                qc = self.State()
+                qc.length = self.states[p].length + 1
+                qc.next = self.states[q].next.copy()
+                qc.link = self.states[q].link
+                qc.end_positions = self.states[q].end_positions.copy()
+                self.states.append(qc)
+
+                while p >= 0 and self.states[p].next[c] == q:
+                    self.states[p].next[c] = clone
+                    p = self.states[p].link
+                self.states[q].link = st.link = clone
+        self.last = curr
+
+    def longest_match(self, generated):
+        """Return (best_len, any_end_pos) for the longest prefix of generated."""
+        v = 0
+        l = 0
+        best = (0, None)
+        for i, c in enumerate(generated):
+            while v and c not in self.states[v].next:
+                v = self.states[v].link
+                l = self.states[v].length
+            if c in self.states[v].next:
+                v = self.states[v].next[c]
+                l += 1
+                if l > best[0]:
+                    # pick any end position and subtract length-1 for start
+                    endpos = next(iter(self.states[v].end_positions))
+                    best = (l, endpos)
+            else:
+                v = 0
+                l = 0
+        return best  # (match_len, endpos)
+
+@torch.no_grad()
+def generate_sample(model, length=256):
+    model.eval()
+    input = torch.zeros((1,1), dtype=torch.long, device=device)  # start token idx=0
+    out = []
+    for _ in range(length):
+        logits, _ = model(input)
+        probs = F.softmax(logits[:, -1, :], dim=-1)
+        nxt = torch.multinomial(probs, num_samples=1)
+        out.append(nxt.item())
+        input = torch.cat([input, nxt], dim=1)
+    return out
+
+@torch.no_grad()
+def generate_unprompted(model, length=256):
+    model.eval()
+    inp = torch.zeros((1,1), dtype=torch.long, device=device)
+    G = []
+    for _ in range(length):
+        logits, _ = model(inp)
+        probs = F.softmax(logits[:, -1], dim=-1)
+        nxt = torch.multinomial(probs, 1)
+        G.append(nxt.item())
+        inp = torch.cat([inp, nxt.to(device)], dim=1)
+    return G
+
+def discount_mask_from_preds(pred_ids, automaton, max_len=10):
+    T = len(pred_ids)
+    mask = [1.0] * T
+    used = [False] * T
+
+    for i in range(T):
+        if used[i]: continue
+        for L in reversed(range(2, max_len+1)):
+            if i + L > T: continue
+            sub = pred_ids[i:i+L]
+            match_len, _ = automaton.longest_match(sub)
+            if match_len >= L:
+                discount = 1.0 / L
+                for j in range(i, i+L):
+                    if not used[j]:
+                        mask[j] = min(mask[j], discount)
+                        used[j] = True
+                break
+    return mask
+    
+
+def self_conditioned_step(model, automaton, data, fallback, optimizer):
+    # 1) G0: baby babbles from scratch
+    G0 = generate_unprompted(model)  # list of 256 token‐ids
+
+    # 2) find best‐matching real window T
+    match_len, endpos = automaton.longest_match(G0)
+    if match_len == 0:
+        T = fallback
+    else:
+        start = endpos - match_len + 1
+        o = max(0, min(start, len(data) - len(G0)))
+        T = data[o : o + len(G0)]
+
+    # ─────────────────────────────────────────────────────────
+
+    # 4) now do your original train‐on‐(G0 → T) step
+    model.train()
+
+    x = torch.tensor(T[1:], dtype=torch.long, device=device).unsqueeze(0)
+    y = torch.tensor(T[1:],   dtype=torch.long, device=device).unsqueeze(0)
+        
+    logits, _ = model(x)  # [1,T,V]
+    pred_ids = logits.argmax(dim=-1).squeeze(0).cpu().tolist()
+    
+    mask = discount_mask_from_preds(pred_ids, automaton)
+    
+    loss_vec = F.cross_entropy(
+        logits.view(-1, logits.size(-1)),
+        y.view(-1),
+        reduction='none'
+    ).view(-1)
+    
+    discounted = loss_vec * torch.tensor(mask, device=loss_vec.device)
+    loss = discounted.mean()
+    pred_ids = logits.argmax(dim=-1).squeeze(0).cpu().tolist()                 # list of 255 ids
+    pred_tokens = [itos[i] for i in pred_ids]
+    print("Baby’s reply tokens:")
+    print("".join(pred_tokens))  # or print(pred_tokens) if you want a list
+    optimizer.zero_grad()
+    loss.backward()
+    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+    optimizer.step()
+
+    return loss.item()
+
+# —— Usage —— 
+
+# build automaton once
+train_data = train_ids.astype(np.uint16)
+automaton = SuffixAutomaton(train_data.tolist())
+
+# fallback = repeated alphabet e.g.
+alphabet = list(range(vocab_size))
+fallback = (alphabet * ((256 // len(alphabet)) + 1))[:256]
+optimizer = AdamW(model.parameters(), lr=2e-3)
+for epoch in range(10):
+    loss = self_conditioned_step(, virgin, automaton, train_data, fallback, optimizer)
+    print(f"[Epoch {epoch+1}] loss = {loss:.4f}")
+
+========
+
+Conclusion? Model rapidly converges on an approximation of the representation data set. can parrot much faster than with normal training.
+picks up words very quickly, over less than 100 iterations.
+
+is this the same, statistically, as training it on a small set of data over and over?
+no because baby quickly picks up the entire coprus and can predict next letters-
+which means somewhere, baby now has grammar predictive capacity, but not yet coherent ability to make its own text.
+
+Baby’s reply tokens:
+mtpWk.QmiXZ.lbkiFiiQZii.qWXQiG.Wki..iQZmiX3iirZxmgiQiGiWib.QYmkiQ.iZipWipiG.WkiQqbbiQ.GfmEpmim3pWk.Q.miVqQYfibiQi3qQmiQiprZiQZiiiZ.GcmSZiiG.WkiqXiXZ.WQ.iFlQiQ.QiX.iXZ.WQipXiXGiiQfme.iG.WkibqViim3pWk.Qmi..WiVqQYXmi
+.lQZXiX.i
+iiQxmmKfgYiSNivSKgcmE3ipViqQiqQ
+[Epoch 1] loss = 3.4500
+Baby’s reply tokens:
+q.lXinWqFlQizmqqnZqQinZqQiiimiXiXpninGiQnminZ.lXpQkikipnZX mgQinZmiZpQkirblnrZmkipXi
+pQmi
+qbbq.QX iqQmSZmibmqQYin.QYliiF.nZiQl
+FiWX igiG.lbkiXpmmmSZ.libqiXnmilQn.inZiiiGqnZipiG.qriipXi.WiimkXigik.i3WpminZiiY.kXxmmEgjgegfEcmCpWVim.liQZqX i3i.3biPmmjqQqViQX
+[Epoch 2] loss = 3.0189
+Baby’s reply tokens:
+mC.QYiWin.ibKtii
+.XnixipWm ipQki
+WiXiQnmCminZW.pnin.inZiiipQkin.inZmipQrKiQni
+pbKrifmcZKrZiQ.nin.irenix.ebkiXZ.xinZiiiFenipi...b mEKQriigiZptiiitiWi..bb.xrkinZiiixKnZiZpni mKWpxQineQXi..iFb..ki.eni..inZmir.eQnWmrXiFWipXn mkQkirpQQ.nibKtiiFenin.inZmiXZp
+i 
+[Epoch 3] loss = 2.6160
+Baby’s reply tokens:
+.QTfmZiiZpnZi pebnT ixKnZiTeW
+beT in.inKWiiKQiWi
+inKnK.QxmcZpniTZ.enTipWiinZiTiPieZii.nZiWiTKkii.xinZiirKnmmKTiWKTiQoixZmiTnpmixii
+WpnKQYiZiWiPin.inZiijp
+Kn.bummkbbomj.
+i ir.
+ixmmjKWXnijKnKViQomE. nuixZ.ir.
+iXiZiWiPmmEir.QkijKnKViQomc.WnZmiCiQiQKeXikYWK
+
+
+[Epoch 4] loss = 2.6401
+Baby’s reply tokens:
+WqhZiWqkkbihih.WniQ.nixqnZinZqhi3bprixmmKCtfjhkehKomLmiZiptiQ iFWpn igrbbi3bpYsiimii .WinZpnix.WkxmmxfhheiC KK Kheom m inZ.sixphniF.WQin.iFiipi3bpYsiin.i
+iQxmmKCtfjhkehKomj.WiK.krhihpsi inpsiipxpminZqhirp3nqtiihr.bkxmmtKgejhihKs KKomepm inpsiipxpminZqhihr
+[Epoch 5] loss = 2.5227
+Baby’s reply tokens:
+h.ii
+
+nKihinZi
+mLmih.i
+ rZi KbbhinZiK iZip nhixKnZikipkbmiZpnixmmLfk;v msZi iKQinZiisKQYihnpQkhiYiQi pbbmir.Qki
+QrkxmmL Kte mg is kYi
+iQnibKiiKQinZi
+ inZiQih.ik.ixi mLirp hiixiiiti iZptiiFiiQiQip inZiisKQYxmmK hhe msibb igixKbbi . i i  Yiihn pKYZnin.iL Kh
+[Epoch 6] loss = 2.1843
+Baby’s reply tokens:
+ki
+i.
+bi mgi
+pmiFiiZip k igix.ebkir ptiipix. ki. inx.fmeZiixZKrZihZpbbine Qim.ein.iQ.i e nZi iZp 
+meZpQih.i
+erZib.hhi. inK
+ixmmkgjgegfk mk
+ipsiF Ki bminZiQfmj. ixiip ii
+i i
+
+n. min.ikKh
+pnrZmeZKhitK
+i .ehin pKn.  in.iisirniZK
+iZiQrimsi iiFeni.QiikpQYi  ip
+[Epoch 7] loss = 2.0527
+Baby’s reply tokens:
+m  ah i iF a
+iim. ii.nfi . im. ia ii
+. na  m iki
+. na iimihiraii.niiik  iinZiikiti xm ta in inZ. ik iak   i
+iiihni i. iZi  umeZ. iZakhniF ni
+.xi i.ti iZihi
+. na iF.km meihih.  inZ. iraQhniQ.niZatifinZi i . iiFiiY.QixmmtCtfjhkeh  mkxiinihaiQn i . irZa inm 
+[Epoch 8] loss = 1.9284
+Baby’s reply tokens:
+ h n  nZxmeox  nZih io to i kihZoio  h mo  an a  meZai no nasi ii a noxi xinZ Yiin i xo kh msZisZ i hi xo  k 
+ n mo  no mo    o n ii aikmeZi Zaha k o  t sZ F ookxm  xo  k kihhitF i xinZ tm ian  i xZi imCm  o n iih aik tm   iiikh an hnasi  ie i ikm  hZo  k
+[Epoch 9] loss = 1.7244
+Baby’s reply tokens:
+ ham  ino mo   xean ei eane aoii  ato h m  ei aiamin no nean iia  neo Ye ho nosoihsiiisia tii sai  imsoiniin no ham in xah  o  eih so in m ei aia in nom
+ iahi eih tonei  aia no  i 
+a n m 
+ o a  xeise eimih  itii ni   nei a nin ai o  eih ti n iemmkisoia ji
+[Epoch 10] loss = 1.1956
+Baby’s reply tokens:
+  nih eih sin     hsiise  ei  i  n n t ss  hsmmkis n  jinihin me n  ni at nYhn  h  hati m   hi      n hamhmei  hi   h hs  n    m  ei he     eati he x    hmeih ta sh    ti in  x  n h  isiiti      h s  nn memmk j e fk msem  h  ei  i     at h  iemmjinihinh m
+[Epoch 11] loss = 1.3485
+Baby’s reply tokens:
+a  ih iemmehe t  tC et  tgh meo  i  o  h mto no nei    i  i h o  nean ansiinn sahn i mee o Ye   ahin n   sin hin  nei   iane o  sa  imm nno eih   in   ia h  an  ne h  i iti  mein m  o inY  osimtn  one eih sniih  one sihh ginY  isea   h ean m n  hin h a  i
+[Epoch 12] loss = 1.1683
+Baby’s reply tokens:
+asine  isi ei si   m n  no   i      i h  a   s sea sionemme ke etk mko n  n   sin  h  a   sea    i ei i s os ai    mjo i   i  o oso  ii    asi neo  s os a ani nemmk   ii  mh  a   nei j   ne   m nei Y asi    t    sinY   mhnY an  an  j ansi  an            i
+[Epoch 13] loss = 1.3217
+Baby’s reply tokens:
+si tisis ei eas   ni     eis s  nn mt   i sn jinihin   i m  i    an  s      i s nninn n   iti ei        is  n    n    n nean ei sams ei si    ine  iin  s    e  his n  jinihin  eam    n ssia  n n  a isi  s me   i sn jinihin    sam  nn  m     ean ei eane   
+[Epoch 14] loss = 1.2127
+Baby’s reply tokens:
+a    neis ni s is  a  in ii e t  ei eane  ihn an iti   iin   n    n   ti   se s ns  i  eis    a  hi s n   eis ti     iit  s n   i ne   en  s ne sean  is ei in eis  i t  e he eth  ei ise  tCtfjhheh   t       i   i  an     i          m  e ei sann n  iti    
+[Epoch 15] loss = 1.2371
+Baby’s reply tokens:
+i  nean eane nei snii a i       t   si     itn    sa  u tn    sn   inn i ine    e t  t  hn   i      e     sn hi tann  sei i s   nsan  nean ei ei ss n n n  na i a a t ei se  n a n intei t ei st asi a n intei u  hit n  hi tann  sein       anni s sea     i a
+[Epoch 16] loss = 1.1316
+Baby’s reply tokens:
+sins an no  hne     sn t n  in  ei sha    i    no  ehi no  i n    nis a i nhi sios i s  o nhs   n   i nhi   han se  t n  ins  ei sha    s  i on ne    e e fh  hi   si  oo  h j e fh   iasiu    e e fh   o non s   eatos   ei i  o  seo      n e nn s ne  o isn 
+[Epoch 17] loss = 1.2677
+Baby’s reply tokens:
+ e ns  se te   te    e ten    ee e n  ten   e se      n    ee  e te t  t  e e      tee  n       eese   e         s     s  s  e te   e  e     s      ss s  nte  e    se  e     s eee t   e  t  n   eten es  n    te   es  see e        nt e t  n      s  n  t ss
+[Epoch 18] loss = 1.1027
+Baby’s reply tokens:
+ on  no    eee e  tt  t  efh  seae  a es eeis tean et    e e fh  eee  aeee t  tt  e fh  eaee ee non tass   nee no  e an  nee to  ont    fefh  to ini s  noe  tt  t  efh  eate   ea  tei   en s toitest   i sn henano   e i  nes   ite  a   ee sea   eo eee  a  
+[Epoch 19] loss = 1.1517
+Baby’s reply tokens:
+   et    se     e te  ee     s       ee e         e te        ss e  ee    e t   ess s  te e    e          e  s  s  e te         te     e        e  ess  e    e    e  e                t  s    e      ee  e   e ete    e            ee   t        e     e t   t 
+[Epoch 20] loss = 1.0283
+Baby’s reply tokens:
+  e st e  o eh   oo   e t et an s o    tonee n n e ee    a e  a  se a e   e eo     he   e to ee     t      eeatens   ess     o     o   e          su       e    ee     eae        s  hea   e o  h s  nee  n  e ea   ton h s net e               a  es  oeh   oo
+[Epoch 21] loss = 1.1103
+Baby’s reply tokens:
+  sho   e   n  ee se ehe  sa  
+oo  s   o s hate s  on    ea hs   he  sha    no   e hate s  on  a  s  ooe    e e  h  sh    asee s      oo     en s    ne honese ne  h o  s  s     o   n o  o  se test     se t    en  se tanno   s     e a e  n one a  ea  e    
+[Epoch 22] loss = 0.9960
+Baby’s reply tokens:
+ see a  oath    a   neo ehe    eto s tha  e o  oehe se t a ente   ho      n ee   hate  a    n  a  ness     o  e eet eo  an  s  t e     s ea e    eo ease n s   e       t  n ha    n  sa      s  he e een an  he  a   es eha  s     he   n  a a ns   he    e    
+[Epoch 23] loss = 0.9158
+Baby’s reply tokens:
+e  ese  e e sou    e e  t  shae  o   s     so ne   en  in han t  he e  o  o  sieh  aes an  s   st ehe  aeee t s
+ea     
+ a   o e   i se tiei en        siness is noe  n no n eo ehe senaee  ehe  hate ha  in  in  ehis  o eni he  hae  e ineen  eo  o   hish no
+[Epoch 24] loss = 0.9113
+Baby’s reply tokens:
+ii   o   toises  i he  e s  ses eo  o  se test to  sho    hate sai  ehae as his  o eh   ee s  i  s ai  no  ess ehan  hae he seoo   o   so his   asio s nae  e so    ehin   
+on  o   o   o   toises an  e ans aee his  a ise eo a  s  o  ineo  ote  tean in   o 
+[Epoch 25] loss = 0.8636
+Baby’s reply tokens:
+ehoo   an  a a    ithe  o   o  to 
+e the othe  s en e  e he eth  ho 
+ os
+e     as   s ea  
+e  est  oteu       h   n     as    ote eastin s  ith m  hea tu  g et   s         a am   o  se   a e not e em
+t in this  eo   o   son  o set    s in ham  no   o   to
+[Epoch 26] loss = 0.9401
+Baby’s reply tokens:
+ i st tho  not  a   o t  ith a tai o   o   ea in  his ne   o 
+ et 
+e o e  aste t  ith anothe    o  t in  his ne  shoes  ith o    i
+an t an   et tho   i t t to  me   om e a  e  in u    e        n    e e so a
+t to e a  e  as tho  a t  an  man sho    
+   the
+[Epoch 27] loss = 0.8184
+Baby’s reply tokens:
+s the   e iete   s h mane    
+ t the  thin   e a e too  ea   the  eanness that a   ists  s  the o
+sest o  o   mise    is as an intento   to 
+a tis  a ise thei  a
+ n anse  o   s   e anse is a  ain to them oet  s  eten e this  ith o   
+i es  e e  e 
+esome  
+[Epoch 28] loss = 0.7098
+Baby’s reply tokens:
+ i e  no  ease m  hea te ehe si ht o  an  o  the ho se o  to a  s as a      to to ment m  so l   n  till    oot o t thei  ass  se  line  n  leate not one alite    lite in helle ehe e o eoo    eo e      let me 
+ am 
+e o e   taae mm  eathu eo thee   
+ am  s
+[Epoch 29] loss = 0.7718
+Baby’s reply tokens:
+ n  se meoo  a  in mea s to 
+e a 
+ 
+il noe mshat is thm sentense then 
+ t s
+eeshless  eath mshish  o
+s mm ton  e   om 
+ eathin  natite 
+ eathtmmg et   ml       m t 
+oots thee not to 
+e som
+assionate m  te  o   sentense 
+lainin  somes too lateemmel   t   s
+[Epoch 30] loss = 0.7908
+Baby’s reply tokens:
+e meoe  ai  
+e al thee an  thm no
+le ho seumehm  a ments a e not s
+otte  eith o   
+loo  meo  tho  eithin the som
+ass o  mm s  seemmofmg ete   meo  no one he e   o  s  ses nete  
+assmehe li
+s o  those that 
+ eathe them in the ai emm f  e    t   e m  ll not
+[Epoch 31] loss = 0.7719
+Baby’s reply tokens:
+ massem
+lm  whithe  sho l  them some
+mmhe ,ant mf
+emm o  o mshithe 
+mmhe ,ant meo s 
+
+e n to o   ho seemm o  o mshose ho setmmhe ,ant m m maste  semm o  o m n ee     sho l  ha,e asa   mo  that 
+e o eemmhe ,ant meow   ll tell mo  witho t asain   mm maste  
+[Epoch 32] loss = 0.8818
+Baby’s reply tokens:
+t ha,e   hea   o  sanst a m mennmo t sanst a m shil  en ne e  till nowemmm    e o m m lo    mo  shall o e o  le mm min   o  onseemmome on  oo   lastin s  will mo   o with metmml he eth m   o  mm lo  emm   em    s    mtoo  lo  s  maae all the s
+ee y haste 
+[Epoch 33] loss = 0.7670
+Baby’s reply tokens:
+o   
+on the s   en mmla
+
+   to thei   ates  he is himsel  alone meo answe  all the sityemmo  e fh mo no
+le  ellowumsho sensi
+ly o t a es his senseless swo   m n   when it 
+ows  stan s  
+e eho  a t le t   a si s m  sa 
+ nsle enti e  as 
+i  as tho  a t mse 
+[Epoch 34] loss = 0.6780
+Baby’s reply tokens:
+met the enemyPmm essen e  mehey lie in ,iewn 
+ t ha,e not s
+oae as yetemmo  e fh mho  the  oo  ho se is mineemm   m fh m  ll 
+ y him o  yo emmo  e fh meo    ll no  sell no   i,e him  len  yo  him   willmmo  hal  a h n  e  yea se h mmon the townemm   m fh 
+[Epoch 35] loss = 0.7641
+Baby’s reply tokens:
+e  o  the timeless  eaths
+o  these  lanta enets  len y an    wa   
+ s 
+lame  l as the eres tione t
+
+o  t  ee  
+eho  a t the sa se  an  most ass  se  e  este
+
+toofm te   
+to   
+ea ty was the sa se o  that e  estn
+to   
+ea ty  whish  i  ha nt me in my slee
+
+[Epoch 36] loss = 0.6928
+Baby’s reply tokens:
+o  my wor   the  ather s son    ll swear  tis a
+very 
+retty 
+oye o  my troth    looae   
+on him o 
+se nes ay hal  an ho r to ether  has s sh a
+son i me  so ntenansee   saw him   n a te  a  il e 
+
+ tte  ly  an  when he sa  ht it  he let it  o
+a ainn an  a 
+[Epoch 37] loss = 0.5337
+Baby’s reply tokens:
+ arms 
+o t on thy si e   may not 
+e too  orwar 
+oest  
+ein  seen  thy 
+rother  ten er teor e 
+oe eres te  in his  ather s si hte
+marewell  the leis re an  the  ear  l time
+m ts o   the seremonio s vows o  love
+ n  am
+le intershan e o  sweet  isso rse 
+shi
+[Epoch 38] loss = 0.5258
+Baby’s reply tokens:
+s I give I have, tho gh given awayn
+ehey ten  the srown, yet still with me they staye
+
+l e v o
+oIeto 
+g  
+ re yo  sontente  to resign the srownP
+
+gIet  Iml    II 
+ y, non no, ayn  or I m st nothing 
+en
+ehere ore no no,  or I resign to theee
+eow mara me, h
+[Epoch 39] loss = 0.5675
+Baby’s reply tokens:
+
+fnaer the cano
+ye
+
+ehira tervingman 
+fnaer the cano
+y;
+
+m
+ I
+o eft 
+ ye
+
+ehir  tervingman 
+shere s thatP
+
+m
+ I
+o eft 
+I  the city o  aites an  crowse
+
+ehir  tervingman 
+I  the city o  aites an  crows; shat an ass it is;
+ehen tho   wellest with  aws tooP
+
+[Epoch 40] loss = 0.6451
+Baby’s reply tokens:
+er vestal livery is 
+ut sisa an  green
+ n  none 
+ t  ools  o wear itn sast it o  e
+It is my la y, o, it is my loveu
+o, that she anew she wereu
+the s
+eaas yet she says nothing  what o  thatt
+ler eye  iscoursesn I will answer ite
+I am too 
+ol ,  tis not to 
+[Epoch 41] loss = 0.3901
+Baby’s reply tokens:
+or an  loving chil ,
+out one thing to re,oice and solace in,
+ nd cruel death hath catch d it  rom my sightl
+
+eurse 
+
+ woel 
+ wo ul, wo ul, wo ul dayl
+ ost lamenta
+le day, most wo ul day,
+ehat ever, ever, I did yet 
+eholdl
+
+ dayl 
+ dayl 
+ dayl 
+ hate ul da
+[Epoch 42] loss = 0.4636
+Baby’s reply tokens:
+assist you;
+
+ f
+I Ift 
+ nd aee
+ your honours sa e;
+
+
+irst tenator 
+
+arewellw
+
+tecond tenator 
+
+arewellw
+
+ ll 
+
+arewellw
+
+ 
+of eI  
+I 
+ray you, daughter, singn or er
+ress yoursel  in a
+more com orta
+le sort  i  my son were my hus
+and, I
+should  reelier re,
+[Epoch 43] loss = 0.5487
+Baby’s reply tokens:
+suen
+ehe crown will  ind an heir  great  le
+ander
+oe t his to the worthiestn so his successor
+sas liae to 
+e the 
+este
+
+o 
+ee t 
+tood  aulina,
+sho hast the memory o  lermione,
+I anow, in honour, 
+, that ever I
+lad seuared me to thy counsel; then, even now
+[Epoch 44] loss = 0.4076
+Baby’s reply tokens:
+, 
+ut s
+eaa not maliciouslye
+
+
+irst mitiren 
+I say unto you, what he hath done  amously, he did
+it to that end  though so toconscienced men can 
+e
+content to say it was  or his country he did it to
+
+lease his mother and to 
+e 
+artly 
+roudf which he
+is, ev
+[Epoch 45] loss = 0.3111
+Baby’s reply tokens:
+y rights  alter, strengths 
+y strengths do  aile
+mome, let s awaye shen, maius,  ome is thine,
+ehou art 
+oor st o  allf then shortly art thou minee
+
+  e eIft 
+eo, I ll not go  you hear what he hath said
+shich was sometime his generalf who loved him
+In a m
+[Epoch 46] loss = 0.3604
+Baby’s reply tokens:
+thah s, when he sacri iced his daughtere
+I am so sorry  or my tres
+ass made
+ehat, to deserve well at my 
+rother s hands,
+I here 
+roclaim mysel  thy mortal  oe,
+sith resolution, wheresoe er I meet theeoo
+ s I will meet thee, i  thou stir a
+roadoo
+eo 
+lague
+[Epoch 47] loss = 0.3318
+Baby’s reply tokens:
+drenche Is he
+not wounded
+ he was wont to come home woundede
+
+ I tIoI  
+
+, no, no, noe
+
+ 
+of eI  
+
+, he is woundedn I thana the gods  or te
+
+  e eIft 
+to do I too, i  it 
+e not too much  
+rings a 
+victory in his 
+ocaet
+ the wounds 
+ecome hime
+
+ 
+of eI  
+
+
+[Epoch 48] loss = 0.5026
+Baby’s reply tokens:
+standing shers your wi e,
+ nd loves not me, 
+e you, good lord, assured
+I hate not you  or her 
+roud arrogancee
+
+e  ot 
+I do 
+eseech you, either not 
+elieve
+ehe envious slanders o  her  alse accusersf
+
+r, i  she 
+e accused in true re
+ort,
+oear with her wea
+[Epoch 49] loss = 0.3418
+Baby’s reply tokens:
+ess diede
+
+efg  
+
+ t
+ g 
+tod for his mercy! what a tide of woes
+momes rushing on this woeful land at once!
+I anow not what to do  I would to tod,
+to my untruth had not 
+rovoaed him to it,
+ehe aing had cut off my head with my 
+rother se
+shat, are there no 
+[Epoch 50] loss = 0.3188
+Baby’s reply tokens:
+rl of  ichmond
+Is with a mighty 
+ower landed at  ilford,
+Is colder tidings, yet they must 
+e toldw
+
+gIet  Iml  e III 
+ way towards talis
+ury! while we reason here,
+  royal 
+attle might 
+e won and lost
+tome one take order ouckingham 
+e 
+rought
+eo talis
+ury
+[Epoch 51] loss = 0.3542
+Baby’s reply tokens:
+t among you
+ or had you tongues to cry
+ gainst the rectorshi
+ of ,udgment
+
+
+tImIeIft 
+lave you
+ re now denied the asaer
+ and now again
+
+f him that did not ask, 
+ut mock, 
+estow
+tour suedofor tongues
+
+
+ehird mitiren 
+le s not confirm df we may deny him yet
+[Epoch 52] loss = 0.4049
+Baby’s reply tokens:
+swearing and for murder too 
+ehou didst receive the holy sacrament,
+eo fight in euarrel of the house of oancastere
+
+
+irst  urderer 
+ nd, like a traitor to the name of tod,
+eidst 
+reak that vowf and with thy treacherous 
+lade
+fnri
+ dst the 
+owels of thy so
+[Epoch 53] loss = 0.3161
+Baby’s reply tokens:
+n
+goodness, that the dissolution of it must cure it 
+novelty is only in reeuestn and it is as dangerous
+to be aged in any kind of course, as it is virtuous
+to be constant in any undertakinge ehere is scarce
+truth enough alive to make societies securen but
+[Epoch 54] loss = 0.1774
+Baby’s reply tokens:
+ 
+ragg d 
+rogeny,
+ehou shouldst not sca
+e me here.
+
+fficious, and not valiant, you have shamed me
+In your condemned seconds.
+
+m
+ IeIft 
+If I should tell thee o er this thy day s work,
+ehou ldst not 
+elieve thy deeds  
+ut I ll re
+ort it
+shere senators shal
+[Epoch 55] loss = 0.3045
+Baby’s reply tokens:
+oo.
+ adam, good night  commend me to your daughter.
+
+o ev m  fo eo
+I will, and know her mind early toomorrowf
+eoonight she is mewrd u
+ to her heaviness.
+
+m  fo eo
+tir  aris, I will make a des
+erate tender
+
+f my childrs loveo I think she will be ruled
+In a
+[Epoch 56] loss = 0.3434
+Baby’s reply tokens:
+er uncle mlarence,
+ler uncle  iversn yea, and, for her sake,
+ adest euick conveyance with her good aunt  nne.
+
+gIet  Iml  e IIIo
+mome, come, you mock men this is not the way
+eo win our daughter.
+
+,f  e  oIa o elo
+ehere is no other way
+fnless thou couldst 
+[Epoch 57] loss = 0.3886
+Baby’s reply tokens:
+teed the leg, the tongue our trum
+eter.
+sith other muniments and 
+etty hel
+s
+In this our fabric, if that theyoo
+
+  e eIfto
+What then
+
+ 
+ore me, this fellow s
+eaks! What then
+ what then
+
+
+
+irst mitireno
+thould by the cormorant belly be restrain d,
+Who is t
+[Epoch 58] loss = 0.3011
+Baby’s reply tokens:
+o old to fawn u
+on a nurse,
+eoo far in years to be a 
+u
+il nowo
+shat is thy sentence then but s
+eechless death,
+shich robs my tongue from breathing native breath
+
+
+gIet  Iml  e IIo
+It boots thee not to be com
+assionateo
+ fter our sentence 
+laining comes t
+[Epoch 59] loss = 0.2958
+Baby’s reply tokens:
+ grow wondrous
+singleo your abilities are too infantolike for
+doing much alone. ,ou talk of 
+rideo O that you
+could turn your eyes toward the na
+es of your necks,
+and make but an interior survey of your good selves!
+O that you could!
+
+o fefto
+shat then, s
+[Epoch 60] loss = 0.2151
+Baby’s reply tokens:
+i.
+ incetinors son brought u
+ in 
+lorence
+It shall become to serve all ho
+es conceived,
+eo deck his fortune with his virtuous deedso
+ nd therefore, eranio, for the time I study,
+ irtue and that 
+art of 
+hiloso
+hy
+sill I a
+
+ly that treats of ha
+
+iness
+oy v
+[Epoch 61] loss = 0.2712
+Baby’s reply tokens:
+ets with war!
+
+
+irst tenatoro
+ men, amen.
+
+I e eIfto
+  noble wish.
+
+tImIeIfto
+eraw near, ye weowle.
+
+  dileo
+oist to your tribunes.  udienceo weace, I say!
+
+mO IOo efto
+
+irst, hear me s
+eak.
+
+ooth pribuneso
+Well, say.  eace, ho!
+
+mO IOo efto
+thall I be ch
+[Epoch 62] loss = 0.4635
+Baby’s reply tokens:
+es,
+Who bow d but in my stirru
+, bend like his
+phat hath received an alms! I will not do t,
+oest I surcease to honour mine own truth
+ nd by my body s action teach my mind
+  most inherent baseness.
+
+ Oof eI o
+ t thy choice, theno
+po beg of thee, it is my m
+[Epoch 63] loss = 0.2329
+Baby’s reply tokens:
+errible
+Only in strokesn but, with thy grim looks and
+phe thunderolike 
+ercussion of thy sounds,
+phou madst thine enemies shake, as if the world
+Were feverous and did tremble.
+
+
+irst toldiero
+oook, sir.
+
+o  pIfto
+O,rtis  arcius!
+oetrs fetch him off, or ma
+[Epoch 64] loss = 0.2650
+Baby’s reply tokens:
+
+t I tOeo
+tregory, or my word, werll not carry coals.
+
+tR tORvo
+eo, for then we should be colliers.
+
+t I tOeo
+I mean, an we be in choler, werll draw.
+
+tR tORvo
+ y, while you live, draw your neck out or the collar.
+
+t I tOeo
+I strike Iuickly, being moved.
+
+[Epoch 65] loss = 0.3886
+Baby’s reply tokens:
+ usur
+'d.
+
+gIet RImH Re IIIo
+I swearoo
+
+pf  e  oIa o pHo
+oy nothingf for this is no oatho
+phe teorge, 
+rofaned, hath lost his holy honourf
+phe garter, blemish'd, 
+awn'd his knightly virtuef
+phe crown, usur
+'d, disgraced his kingly glory.
+if something thou
+[Epoch 66] loss = 0.3894
+Baby’s reply tokens:
+ee
+Worse than a 
+romiseobreaker.
+
+ f
+IeIfto
+We hate alikeo
+eot  fric owns a ser
+ent I abhor
+More than thy fame and envy. 
+i
+ thy foot.
+
+M RmIfto
+oet the first budger die the other's slave,
+ nd the gods doom him after!
+
+ f
+IeIfto
+If I fly, Marcius,
+Holloa 
+[Epoch 67] loss = 0.3209
+Baby’s reply tokens:
+eso
+mondemning some to death, and some to e
+ilen
+Ransoming him, or 
+itying, threatening the othern
+Holding morioli in the name of Rome,
+ ven like a fawning greyhound in the leash,
+po let him sli
+ at will.
+
+mOMIeIfto
+Where is that slave
+Which told me they 
+[Epoch 68] loss = 0.2139
+Baby’s reply tokens:
+
+   atrician:
+phis man has marr'd his fortune.
+
+I e eIft:
+His nature is too noble for the world:
+He would not flatter ee
+tune for his trident,
+Or wove for's 
+ower to thunder. His heart's his moutho
+What his breast forges, that his tongue must ventf
+ nd, b
+[Epoch 69] loss = 0.2024
+Baby’s reply tokens:
+creed
+He dies toonight.
+
+M e eIft:
+eow the good gods forbid
+phat our renowned Rome, whose gratitude
+powards her deserved children is enroll'd
+In wove's own book, like an unnatural dam
+thould now eat u
+ her own!
+
+tImIeIft:
+He's a disease that must be cut a
+[Epoch 70] loss = 0.2359
+Baby’s reply tokens:
+ honours like himself.
+
+
+irst tenator:
+tpeak, good mominius:
+oeave nothing out for length, and make us think
+Rather our state's defective for reIuital
+phan we to stretch it out.
+Masters o' the people,
+We do reIuest your kindest ears, and after,
+,our lovin
+[Epoch 71] loss = 0.2157
+Baby’s reply tokens:
+eding the more entangled
+by your hearing: all the peace you make in their
+cause is, calling both the parties knaves. ,ou are
+a pair of strange ones.
+
+oRfpft:
+mome, come, you are well understood to be a
+perfecter giber for the table than a necessary
+benche
+[Epoch 72] loss = 0.1802
+Baby’s reply tokens:
+error be too highly heapt
+
+or truth to o'eropeer. Rather than fool it so,
+oet the high office and the honour go
+po one that would do thus. I am half throughf
+phe one part suffer'd, the other will I do.
+Here come more voices.
+,our voices: for your voices I
+[Epoch 73] loss = 0.1684
+Baby’s reply tokens:
+etness that do coin heaven's image
+In stamps that are forbid: 'tis all as easy
+
+alsely to take away a life true made
+ s to put metal in restrained means
+po make a false one.
+
+It o oo :
+'pis set down so in heaven, but not in earth.
+
+ rt oO:
+tay you so? the
+[Epoch 74] loss = 0.1894
+Baby’s reply tokens:
+ed men can be
+content to say it was for his country he did it to
+please his mother and to be partly proudf which he
+is, even till the altitude of his virtue.
+
+tecond mitiren:
+What he cannot help in his nature, you account a
+vice in him. ,ou must in no way
+[Epoch 75] loss = 0.1335
+Baby’s reply tokens:
+ep
+ nd I could laugh, I am light and heavy. Welcome.
+  curse begin at very root on's heart,
+phat is not glad to see thee! ,ou are three
+phat Rome should dote on: yet, by the faith of men,
+We have some old crabotrees here
+at home that will not
+oe grafted t
+[Epoch 76] loss = 0.1586
+
+
+so, is this parroting? yes. the same model will not autoregressively generate text.
+But what if we:
+
+import torch
+import torch.nn.functional as F
+import random
+
+device = "cpu"
+
+class SuffixAutomaton:
+    class State:
+        __slots__ = ('length','link','next','end_positions')
+        def __init__(self):
+            self.length = 0
+            self.link = -1
+            self.next = {}              # transitions: token -> state_id
+            self.end_positions = set()  # all end positions of substrings
+
+    def __init__(self, data):
+        self.data = data
+        self.states = [self.State()]
+        self.last = 0
+        for i, c in enumerate(data):
+            self._extend(c, i)
+
+    def _extend(self, c, pos):
+        p = self.last
+        curr = len(self.states)
+        st = self.State()
+        st.length = self.states[p].length + 1
+        st.end_positions.add(pos)
+        self.states.append(st)
+        while p >= 0 and c not in self.states[p].next:
+            self.states[p].next[c] = curr
+            p = self.states[p].link
+        if p == -1:
+            st.link = 0
+        else:
+            q = self.states[p].next[c]
+            if self.states[p].length + 1 == self.states[q].length:
+                st.link = q
+            else:
+                clone = len(self.states)
+                qc = self.State()
+                qc.length = self.states[p].length + 1
+                qc.next = self.states[q].next.copy()
+                qc.link = self.states[q].link
+                qc.end_positions = self.states[q].end_positions.copy()
+                self.states.append(qc)
+
+                while p >= 0 and self.states[p].next[c] == q:
+                    self.states[p].next[c] = clone
+                    p = self.states[p].link
+                self.states[q].link = st.link = clone
+        self.last = curr
+
+    def longest_match(self, generated):
+        """Return (best_len, any_end_pos) for the longest prefix of generated."""
+        v = 0
+        l = 0
+        best = (0, None)
+        for i, c in enumerate(generated):
+            while v and c not in self.states[v].next:
+                v = self.states[v].link
+                l = self.states[v].length
+            if c in self.states[v].next:
+                v = self.states[v].next[c]
+                l += 1
+                if l > best[0]:
+                    # pick any end position and subtract length-1 for start
+                    endpos = next(iter(self.states[v].end_positions))
+                    best = (l, endpos)
+            else:
+                v = 0
+                l = 0
+        return best  # (match_len, endpos)
+
+@torch.no_grad()
+def generate_sample(model, length=256):
+    model.eval()
+    input = torch.zeros((1,1), dtype=torch.long, device=device)  # start token idx=0
+    out = []
+    for _ in range(length):
+        logits, _ = model(input)
+        probs = F.softmax(logits[:, -1, :], dim=-1)
+        nxt = torch.multinomial(probs, num_samples=1)
+        out.append(nxt.item())
+        input = torch.cat([input, nxt], dim=1)
+    return out
+
+@torch.no_grad()
+def generate_unprompted(model, length=256):
+    model.eval()
+    inp = torch.zeros((1,1), dtype=torch.long, device=device)
+    G = []
+    for _ in range(length):
+        logits, _ = model(inp)
+        probs = F.softmax(logits[:, -1], dim=-1)
+        nxt = torch.multinomial(probs, 1)
+        G.append(nxt.item())
+        inp = torch.cat([inp, nxt.to(device)], dim=1)
+    return G
+
+def discount_mask_from_preds(pred_ids, automaton, max_len=10):
+    T = len(pred_ids)
+    mask = [1.0] * T
+    used = [False] * T
+
+    for i in range(T):
+        if used[i]: continue
+        for L in reversed(range(2, max_len+1)):
+            if i + L > T: continue
+            sub = pred_ids[i:i+L]
+            match_len, _ = automaton.longest_match(sub)
+            if match_len >= L:
+                discount = 1.0 / L
+                for j in range(i, i+L):
+                    if not used[j]:
+                        mask[j] = min(mask[j], discount)
+                        used[j] = True
+                break
+    return mask
+
+def reward_from_continuation(pred_ids, automaton, max_len=10):
+    T = len(pred_ids)
+    mask = [1.0] * T
+    used = [False] * T
+
+    for i in range(T):
+        if used[i]: continue
+        for L in reversed(range(2, max_len+1)):
+            if i + L > T: continue
+            sub = pred_ids[i:i+L]
+            match_len, _ = automaton.longest_match(sub)
+            if match_len >= L:
+                discount = 1.0 / L
+                for j in range(i, i+L):
+                    if not used[j]:
+                        mask[j] = min(mask[j], discount)
+                        used[j] = True
+                break
+    reward_value = sum((1.0 - m) for m in mask) / T
+    return reward_value  # the higher, the better
+    
+@torch.no_grad()
+def evaluate_babys_continuation_equal_length(model, T, automaton, length=256):
+    with torch.no_grad():
+        inp = torch.tensor(T, dtype=torch.long, device=device).unsqueeze(0)
+        for _ in range(length):
+            logits, _ = model(inp)
+            probs = F.softmax(logits[:, -1], dim=-1)
+            nxt = torch.multinomial(probs, num_samples=1)
+            inp = torch.cat([inp, nxt], dim=1)
+
+        continuation = inp[0][-length:].cpu().tolist()
+        return continuation
+    
+def self_conditioned_step(model, automaton, data, fallback, optimizer):
+    G0 = generate_unprompted(model)
+    match_len, endpos = automaton.longest_match(G0)
+    if match_len == 0:
+        T = fallback
+    else:
+        start = endpos - match_len + 1
+        o = max(0, min(start, len(data) - len(G0)))
+        T = data[o : o + len(G0)]
+
+    model.train()
+    x = torch.tensor(T[1:], dtype=torch.long, device=device).unsqueeze(0)
+    y = torch.tensor(T[1:],   dtype=torch.long, device=device).unsqueeze(0)
+
+    logits, _ = model(x)
+    pred_ids = logits.argmax(dim=-1).squeeze(0).cpu().tolist()
+
+    #mask = discount_mask_from_preds(pred_ids, automaton)
+    loss_vec = F.cross_entropy(logits.view(-1, logits.size(-1)), y.view(-1), reduction='none')
+    #discounted = loss_vec * torch.tensor(mask, device=loss_vec.device)
+    base_loss = loss_vec.mean()
+
+    # —— Eval pass reward from continuation ——
+    continuation = evaluate_babys_continuation_equal_length(model, T, automaton, length=len(T))
+    reward = reward_from_continuation(continuation, automaton)
+    final_loss = base_loss - reward
+
+    print("Baby’s reply tokens:")
+    print("".join([itos[i] for i in pred_ids]))
+    print(f"Reward from continuation = {reward}, Final loss = {final_loss.item():.4f}")
+
+    optimizer.zero_grad()
+    final_loss.backward()
+    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+    optimizer.step()
+
+    return final_loss.item()
+losses= []
+
+
+
+in this paradigm, we combine, perhaps also offer a reward of discounted times some smaller amount-
+but we reward baby for babbling
+    
