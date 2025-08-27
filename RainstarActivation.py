@@ -14,4 +14,4 @@ class RainstarActivation(nn.Module):
     def forward(self, x):
        neg =  nn.SiLU()(x) * (x*torch.sigmoid(x)) + x/(1+torch.abs(x))
        pos =  x -  x/(1+torch.abs(x))
-       return (neg *torch.sigmoid(-x)) + (pos * torch.sigmoid(x)) +1
+       return (neg *torch.sigmoid(-x)) + (pos * torch.sigmoid(x))
