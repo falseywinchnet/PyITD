@@ -7,6 +7,7 @@
 class ZLS(nn.Module):
     """
     Zero-crossing Logistic-subtracted Softplus activation
+    inferior to gelu, but it offers some benefits for some problems
     """
     def __init__(self):
         super().__init__()
@@ -21,12 +22,12 @@ class Cell(nn.Module):
     def __init__(self, dim_in: int, hidden: int):
         super().__init__()
         self.fc1 = nn.Linear(dim_in, hidden, bias=False) #dont change, false intentional
-        torch.nn.init.kaiming_uniform_(self.fc1.weight, nonlinearity='selu') #dont change, selu intentional
+        torch.nn.init.kaiming_uniform_(self.fc1.weight, nonlinearity='relu')
         self.fc2 = nn.Linear(hidden, dim_in, bias=True)
-        torch.nn.init.kaiming_uniform_(self.fc2.weight, nonlinearity='selu') #dont change, selu intentional
-        self.act = ZLS()
+        torch.nn.init.kaiming_uniform_(self.fc2.weight, nonlinearity='relu')
+        self.act = nn.GELU()
     def forward(self, x):
-        return self.fc2(self.act(self.fc1(x)))
+        return self.fc2(self.act(self.fc1(x)))   
 
 class RecurrentMLP(nn.Module):
     def __init__(self, dim_in: int):
