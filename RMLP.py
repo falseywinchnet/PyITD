@@ -65,6 +65,5 @@ class RecurrentMLP(nn.Module):
     def forward(self, x):
         z =  x
         for j in range(self.k):
-            for i in range(self.k):
                 z = z +  self.atlas.inverse(self.cells_a[j](self.atlas(z)))
         return z
