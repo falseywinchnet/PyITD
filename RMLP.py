@@ -36,6 +36,8 @@ class RecurrentMLP(nn.Module):
 #note- an optimized triton form might not be an issue.
 #note: this gets very low loss and runs very quickly and has minimal parameter overhead.
 
+
+
 import math
 import torch
 import torch.nn as nn
@@ -100,7 +102,6 @@ class ModuloHash(nn.Module):
         self,
         D: int,
         moduli: List[int],
-        learnable: bool = False,
         seed: int = 0,
     ):
         super().__init__()
@@ -185,14 +186,12 @@ class ModCRTMoE(nn.Module):
     def __init__(
         self,
         D: int,
-        O: int,
         num_experts: int,
         moduli: List[int] = None,
-        expert_hidden: int = 256,
         seed: int = 0,
     ):
         super().__init__()
-        self.D, self.O, self.E = D, O, num_experts
+        self.D, self.O, self.E = D, D*2, num_experts
 
         # choose pairwise coprime moduli; default primes until product >= 4E
         if moduli is None:
@@ -227,7 +226,7 @@ class ModCRTMoE(nn.Module):
                 self._pair_data.append((m1, m2, inv))
 
         # experts
-        self.experts = RowWiseExpertsMLP(D, expert_hidden, O,num_experts)
+        self.experts = RowWiseExpertsMLP(D, D*2, D,num_experts)
 
     @torch.no_grad()
     def _crt_pair_batched(self, r: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -277,20 +276,49 @@ class ModCRTMoE(nn.Module):
     @torch.no_grad()
     def route(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        returns:
-          expert_ids: [B]
-          residues: [B, K]
+        Accept x of shape [B, D] or [B, T, D].
+        Returns:
+          expert_ids: [B] or [B, T]
+          residues:   [B, K] or [B, T, K]
         """
-        residues = self.hash(x)           # [B, K]
-        cand, modP = self._crt_pair_batched(residues)
-        expert_ids = self._consensus_pick(residues, cand, modP)
-        return expert_ids, residues
+        if x.ndim == 2:
+            B, D = x.shape
+            x_flat = x
+            shape_info = ("2d", B, 1, D)
+        elif x.ndim == 3:
+            B, T, D = x.shape
+            x_flat = x.reshape(B*T, D)
+            shape_info = ("3d", B, T, D)
+        else:
+            raise ValueError("x must be [B, D] or [B, T, D]")
+
+        residues_flat = self.hash(x_flat)          # [N, K] with N=B or B*T
+        cand, modP = self._crt_pair_batched(residues_flat)   # uses [N, K]
+        eid_flat = self._consensus_pick(residues_flat, cand, modP)  # [N]
+
+        kind, B, T, _ = shape_info
+        if kind == "2d":
+            return eid_flat, residues_flat  # [B], [B, K]
+        else:
+            K = residues_flat.size(-1)
+            return eid_flat.view(B, T), residues_flat.view(B, T, K)  # [B, T], [B, T, K]
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        with torch.no_grad():
-            eid, _ = self.route(x)
-        return self.experts(x, eid)
-
+        # x: [B, D] or [B, T, D]
+        if x.ndim == 2:
+            with torch.no_grad():
+                eid, _ = self.route(x)        # [B]
+            y = self.experts(x, eid)          # [B, D]
+            return y
+        elif x.ndim == 3:
+            B, T, D = x.shape
+            x_flat = x.reshape(B*T, D)
+            with torch.no_grad():
+                eid, _ = self.route(x)        # [B, T]
+            y_flat = self.experts(x_flat, eid.view(-1))  # [B*T, D]
+            return y_flat.view(B, T, D)
+        else:
+            raise ValueError("x must be [B, D] or [B, T, D]")
 
 #despite the added complexity, the UltraMemory layer may be more optimal than the hashMOE.
 #it offers very low loss.
