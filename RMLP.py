@@ -8,6 +8,81 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+class ComplexLinear(nn.Module):
+    def __init__(self, in_features: int, out_features: int, bias: bool = True, nonlinearity: str = "linear"):
+        super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+        self.weight = nn.Parameter(torch.empty(out_features, in_features, dtype=torch.complex64))
+        self.bias = nn.Parameter(torch.empty(out_features, dtype=torch.complex64)) if bias else None
+        self.reset_parameters(nonlinearity)
+
+    def reset_parameters(self, nonlinearity: str):
+        complex_kaiming_uniform_(self.weight, nonlinearity=nonlinearity)
+        if self.bias is not None:
+            complex_uniform_bias_(self.bias, self.in_features)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: [..., in_features] complex
+        y = x.matmul(self.weight.t())
+        if self.bias is not None:
+            y = y + self.bias
+        return y
+
+class ComplexZLS(nn.Module):
+    """
+    Complex64-safe, phase-preserving ZLS.
+    f(z) = [softplus(|z|) - C * s(alpha |z|) * (1 - s(alpha |z|))] * z / |z|
+    with C = 4 * log(2). Define f(0) = 0.
+    Small-signal gain at 0 is 0.5 (like softplus).
+    """
+    def __init__(self, alpha: float = 0.5, eps: float = 1e-12, gain: float = 1.0):
+        super().__init__()
+        self.alpha = float(alpha)
+        self.eps = float(eps)
+        self.gain = float(gain)
+        c_val = 4.0 * math.log(2.0)
+        self.register_buffer("_c", torch.tensor(c_val, dtype=torch.float32))
+
+    def forward(self, z: torch.Tensor) -> torch.Tensor:
+        if not torch.is_complex(z) or z.dtype != torch.complex64:
+            raise TypeError("RadialZLS expects complex64 input.")
+        r = z.abs()                              # float32
+        sp = F.softplus(r)                       # float32, stable
+        s = torch.sigmoid(self.alpha * r)        # float32
+        ba = s * (1.0 - s)                       # float32
+        c = self._c.to(device=z.device, dtype=r.dtype)
+        g = sp - c * ba                          # float32
+        # phase-preserving rescale; safe at r=0
+        scale = g / (r + self.eps)               # float32
+        y = z * scale.to(dtype=z.real.dtype)
+        if self.gain != 1.0:
+            y = y * self.gain
+        return y
+class ComplexCell(nn.Module):
+    def __init__(self, dim_in: int, hidden: int):
+        super().__init__()
+        self.fc1 = ComplexLinear(dim_in, hidden, bias=False, nonlinearity="relu")
+        self.act = ComplexZLS()
+        self.fc2 = ComplexLinear(hidden, dim_in, bias=True, nonlinearity="relu")
+
+    def forward(self, x):
+        return self.fc2(self.act(self.fc1(x)))
+
+class ComplexRecurrentMLP(nn.Module):
+    def __init__(self, dim_in: int, k: int = 2, hidden_scale: float = 4.0):
+        super().__init__()
+        hidden = int(dim_in * hidden_scale)
+        self.k = k
+        self.cells_a = nn.ModuleList([ComplexCell(dim_in, hidden) for _ in range(k)])
+
+    def forward(self, x):
+        z = x
+        for i in range(self.k):
+            z = z + self.cells_a[i](z)
+        return z
+    
 class Cell(nn.Module):
     def __init__(self, dim_in: int, hidden: int):
         super().__init__()
