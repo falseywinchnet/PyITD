@@ -34,6 +34,207 @@ class RecurrentMLP(nn.Module):
             z = z + self.cells_a[i](z)
         return z
 
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from typing import Optional, Tuple,List
+import math
+import torch.nn.functional as F
+
+import math
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+# Sparse-gradient router; gradients only to chosen k logits
+class RouterTopK(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, z, k, tau):
+        topv, topi = torch.topk(z, k, dim=1, largest=True, sorted=False)
+        w = torch.softmax(topv / (tau + 1e-8), dim=1)
+        ctx.save_for_backward(topi, w)
+        ctx.z_shape = z.shape
+        ctx.tau = float(tau)
+        return topi, w
+
+    @staticmethod
+    def backward(ctx, grad_topi, grad_w):
+        topi, w = ctx.saved_tensors
+        tau = ctx.tau
+        grad_z = None
+        if grad_w is not None:
+            s = (grad_w * w).sum(dim=1, keepdim=True)
+            grad_topv = (w * (grad_w - s)) / (tau + 1e-8)
+            grad_z = torch.zeros(ctx.z_shape, device=w.device, dtype=w.dtype)
+            grad_z.scatter_add_(1, topi, grad_topv)
+        return grad_z, None, None
+
+def router_topk(z, k, tau):
+    return RouterTopK.apply(z, k, tau)
+
+def _apply_mixture_grouped(x_flat, topi, weights, W):
+    """
+    Group tokens by expert and do large GEMMs:
+    x_flat:  [N, in]
+    topi:    [N, k] (long)
+    weights: [N, k]
+    W:       [L, out, in]
+    return:  [N, out]
+    """
+    N, in_dim = x_flat.shape
+    L, out_dim, in_dim_w = W.shape
+    assert in_dim == in_dim_w
+
+    # Flatten assignments
+    k = topi.shape[1]
+    token_idx = torch.arange(N, device=topi.device).repeat_interleave(k)        # [N*k]
+    expert_idx = topi.reshape(-1)                                               # [N*k]
+    w_flat = weights.reshape(-1)                                                # [N*k]
+
+    # Sort by expert to form contiguous segments
+    expert_sorted, order = torch.sort(expert_idx)
+    token_sorted = token_idx.index_select(0, order)
+    w_sorted = w_flat.index_select(0, order)
+
+    # Segment boundaries for each used expert
+    changed = torch.ones_like(expert_sorted, dtype=torch.bool)
+    changed[1:] = expert_sorted[1:] != expert_sorted[:-1]
+    seg_starts = torch.nonzero(changed, as_tuple=False).flatten()
+    seg_ends = torch.empty_like(seg_starts)
+    seg_ends[:-1] = seg_starts[1:]
+    seg_ends[-1] = expert_sorted.numel()
+    used_experts = expert_sorted.index_select(0, seg_starts)
+
+    y = x_flat.new_zeros(N, out_dim)
+
+    # Loop per used expert; usually small (<= L) and fast vs GEMM cost
+    for exp, s, e in zip(used_experts.tolist(), seg_starts.tolist(), seg_ends.tolist()):
+        idx = token_sorted[s:e]                        # [m]
+        ws = w_sorted[s:e].unsqueeze(1)               # [m, 1]
+        X = x_flat.index_select(0, idx)               # [m, in]
+        # y_e = X @ W[exp].T  (F.linear is faster/cleaner for row-major)
+        y_e = F.linear(X, W[exp])                      # [m, out]
+        y_e.mul_(ws)                                   # scale by gate weights (cheap: [m, out])
+        y.index_add_(0, idx, y_e)                      # scatter-accumulate
+    return y
+
+
+def _apply_bias_grouped(topi, weights, B):
+    """
+    Bias via grouped adds (no big GEMM):
+    topi:    [N, k] (long)
+    weights: [N, k]
+    B:       [L, out]
+    return:  [N, out]
+    """
+    N, k = topi.shape
+    out_dim = B.shape[1]
+
+    token_idx = torch.arange(N, device=topi.device).repeat_interleave(k)        # [N*k]
+    expert_idx = topi.reshape(-1)                                               # [N*k]
+    w_flat = weights.reshape(-1)                                                # [N*k]
+
+    expert_sorted, order = torch.sort(expert_idx)
+    token_sorted = token_idx.index_select(0, order)
+    w_sorted = w_flat.index_select(0, order)
+
+    changed = torch.ones_like(expert_sorted, dtype=torch.bool)
+    changed[1:] = expert_sorted[1:] != expert_sorted[:-1]
+    seg_starts = torch.nonzero(changed, as_tuple=False).flatten()
+    seg_ends = torch.empty_like(seg_starts)
+    seg_ends[:-1] = seg_starts[1:]
+    seg_ends[-1] = expert_sorted.numel()
+    used_experts = expert_sorted.index_select(0, seg_starts)
+
+    y = B.new_zeros((N, out_dim))
+    for exp, s, e in zip(used_experts.tolist(), seg_starts.tolist(), seg_ends.tolist()):
+        idx = token_sorted[s:e]                 # [m]
+        ws = w_sorted[s:e].unsqueeze(1)        # [m, 1]
+        y.index_add_(0, idx, ws * B[exp].unsqueeze(0))  # [m, out]
+    return y
+
+class FastLearnedCellX3(nn.Module):
+    def __init__(self, D_in, H, D_out,
+                 L_w1=12, L_w2=12, L_b2=12,
+                 k1=3, k2=3, k3=3, tau1=1.0, tau2=1.0, tau3=1.0,
+                 d_addr=64,
+                 learn_addr=False,
+                 learn_tape_w1=True, learn_tape_w2=True, learn_tape_b2=True):
+        super().__init__()
+        self.D_in, self.H, self.D_out = int(D_in), int(H), int(D_out)
+        self.L_w1, self.L_w2, self.L_b2 = int(L_w1), int(L_w2), int(L_b2)
+        self.k1, self.k2, self.k3 = int(k1), int(k2), int(k3)
+        self.t1, self.t2, self.t3 = float(tau1), float(tau2), float(tau3)
+
+        self.P = nn.Linear(self.D_in, int(d_addr), bias=False)
+        if not learn_addr:
+            for p in self.P.parameters():
+                p.requires_grad = False
+            with torch.no_grad():
+                nn.init.normal_(self.P.weight, std=1.0 / math.sqrt(self.D_in))
+
+        def init_U(L, d, learn):
+            U = torch.randn(L, d)
+            U = U - U.mean(dim=1, keepdim=True)
+            U = U / (U.norm(dim=1, keepdim=True) + 1e-8)
+            return nn.Parameter(U, requires_grad=learn)
+
+        d_addr = int(d_addr)
+        self.U1 = init_U(self.L_w1, d_addr, learn_addr)
+        self.U2 = init_U(self.L_w2, d_addr, learn_addr)
+        self.U3 = init_U(self.L_b2, d_addr, learn_addr)
+
+        # Make params contiguous; channels-last-ish helps matmul kernels
+        self.W1 = nn.Parameter(
+            F.normalize(torch.randn(self.L_w1, self.H, self.D_in), dim=(1, 2)).contiguous(),
+            requires_grad=learn_tape_w1
+        )
+        self.W2 = nn.Parameter(
+            F.normalize(torch.randn(self.L_w2, self.D_out, self.H), dim=(1, 2)).contiguous(),
+            requires_grad=learn_tape_w2
+        )
+        self.b2 = nn.Parameter(
+            F.normalize(torch.randn(self.L_b2, self.D_out), dim=1).contiguous(),
+            requires_grad=learn_tape_b2
+        )
+
+        self.act = nn.GELU()
+
+    def _address(self, x_addr: torch.Tensor):
+        U_pack = torch.cat([self.U1, self.U2, self.U3], dim=0)          # [Ltot, d]
+        Z = x_addr @ U_pack.t()                                         # [N, Ltot]
+        s1, s2, s3 = self.L_w1, self.L_w2, self.L_b2
+        z1, z2, z3 = torch.split(Z, (s1, s2, s3), dim=1)
+
+        i1, w1 = router_topk(z1, self.k1, self.t1)
+        i2, w2 = router_topk(z2, self.k2, self.t2)
+        i3, w3 = router_topk(z3, self.k3, self.t3)
+        return (i1, w1), (i2, w2), (i3, w3)
+
+    def forward(self, x):
+        if x.ndim == 3:
+            B, T, D = x.shape
+            x_flat = x.reshape(B * T, D)
+        else:
+            B, T = x.shape[0], 1
+            x_flat = x
+
+        x_addr = self.P(x_flat)                                        # [N, d_addr]
+        (i1, w1), (i2, w2), (i3, w3) = self._address(x_addr)
+
+        h = _apply_mixture_grouped(x_flat, i1, w1, self.W1)  # [N, H]
+        h = self.act(h)
+
+        
+        y = _apply_mixture_grouped(h, i2, w2, self.W2)       # [N, D_out]
+        y = y + _apply_bias_grouped(i3, w3, self.b2)
+      
+
+        return y.view(B, T, self.D_out) if x.ndim == 3 else y
+
+
+
         
 class PairwiseRotSpiral(nn.Module):
     def __init__(self, dim, radius=6.0, omega=1.0, k=1.0, step=0.1, cube_shell=False):
@@ -738,10 +939,9 @@ class LocalSelfAttention(nn.Module):
 class BlockFast(nn.Module):
     def __init__(self, config,d):
         super().__init__()
-      
-        self.encoder = RecurrentMLP(config.n_embd)
-        self.decoder = RecurrentMLP(config.n_embd)
-        self.decoder_attn = RecurrentMLP(config.n_embd)
+        self.encoder =FastLearnedCellX3(D_in=config.n_embd,H=config.n_embd*2,D_out=config.n_embd)
+        self.decoder = FastLearnedCellX3(D_in=config.n_embd,H=config.n_embd*2,D_out=config.n_embd)
+        self.decoder_attn = FastLearnedCellX3(D_in=config.n_embd,H=config.n_embd*2,D_out=config.n_embd)
         #note- CANNOT share with decoder for far field.
         #projection is different, codebook needs to be different.
         #input should be shared.
@@ -777,9 +977,9 @@ class FixedEmbedding(nn.Module):
         return self.weight[idx]
         
 @dataclass
-class VTEConfig:
+class GPTConfig:
     block_size: int = 1024
-    vocab_size: int = 66 
+    vocab_size: int = 66 # GPT-2 vocab_size of 50257, padded up to nearest multiple of 64 for efficiency
     n_layer: int = 12
     n_embd: int = 128
     n_head:int = 8
@@ -787,7 +987,7 @@ class VTEConfig:
     dropout: float = 0.1
 
         
-class VirtualTurboEncabulator(nn.Module):
+class GPT(nn.Module):
     def __init__(self, config):
         super().__init__()
         assert config.vocab_size is not None
