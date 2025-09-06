@@ -781,15 +781,10 @@ ultra5 = UltraMemv5Classifier(
 
 
 
-#FastLearnedCellX3 is fast and efficient routed attention
+#FastLearnedCellX3 is somewhat as good as ultramem but much more efficient
 
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
+
 from typing import Optional, Tuple,List
-import math
-import torch.nn.functional as F
-
 import math
 import torch
 import torch.nn as nn
@@ -823,7 +818,7 @@ def router_topk(z, k, tau):
 
 def _apply_mixture_grouped(x_flat, topi, weights, W):
     """
-    Group tokens by expert and do large GEMMs:
+    Group tokens by expert and do large GEMMs without a Python loop.
     x_flat:  [N, in]
     topi:    [N, k] (long)
     weights: [N, k]
@@ -834,43 +829,32 @@ def _apply_mixture_grouped(x_flat, topi, weights, W):
     L, out_dim, in_dim_w = W.shape
     assert in_dim == in_dim_w
 
-    # Flatten assignments
     k = topi.shape[1]
-    token_idx = torch.arange(N, device=topi.device).repeat_interleave(k)        # [N*k]
-    expert_idx = topi.reshape(-1)                                               # [N*k]
-    w_flat = weights.reshape(-1)                                                # [N*k]
+    M = N * k
 
-    # Sort by expert to form contiguous segments
-    expert_sorted, order = torch.sort(expert_idx)
-    token_sorted = token_idx.index_select(0, order)
-    w_sorted = w_flat.index_select(0, order)
+    # Flatten routing
+    token_idx  = torch.arange(N, device=topi.device).repeat_interleave(k)     # [M]
+    expert_idx = topi.reshape(-1)                                             # [M]
+    w_flat     = weights.reshape(-1).to(x_flat.dtype)                         # [M]
 
-    # Segment boundaries for each used expert
-    changed = torch.ones_like(expert_sorted, dtype=torch.bool)
-    changed[1:] = expert_sorted[1:] != expert_sorted[:-1]
-    seg_starts = torch.nonzero(changed, as_tuple=False).flatten()
-    seg_ends = torch.empty_like(seg_starts)
-    seg_ends[:-1] = seg_starts[1:]
-    seg_ends[-1] = expert_sorted.numel()
-    used_experts = expert_sorted.index_select(0, seg_starts)
+    # Gather per-assignment inputs and scale by gate weights
+    X = x_flat.index_select(0, token_idx)                                     # [M, in]
+    X = X * w_flat.unsqueeze(1)                                               # [M, in]
 
-    y = x_flat.new_zeros(N, out_dim)
+    # Gather per-assignment expert kernels and apply in one batched op
+    # y_assign[m] = W[expert_idx[m]] @ X[m]
+    W_assign = W.index_select(0, expert_idx)                                  # [M, out, in]
+    y_assign = torch.einsum("moi,mi->mo", W_assign, X)                        # [M, out]
 
-    # Loop per used expert; usually small (<= L) and fast vs GEMM cost
-    for exp, s, e in zip(used_experts.tolist(), seg_starts.tolist(), seg_ends.tolist()):
-        idx = token_sorted[s:e]                        # [m]
-        ws = w_sorted[s:e].unsqueeze(1)               # [m, 1]
-        X = x_flat.index_select(0, idx)               # [m, in]
-        # y_e = X @ W[exp].T  (F.linear is faster/cleaner for row-major)
-        y_e = F.linear(X, W[exp])                      # [m, out]
-        y_e.mul_(ws)                                   # scale by gate weights (cheap: [m, out])
-        y.index_add_(0, idx, y_e)                      # scatter-accumulate
+    # Scatter-add back to tokens
+    y = x_flat.new_zeros((N, out_dim))                                        # [N, out]
+    y.index_add_(0, token_idx, y_assign)
     return y
 
 
 def _apply_bias_grouped(topi, weights, B):
     """
-    Bias via grouped adds (no big GEMM):
+    Bias via grouped adds, loop-free.
     topi:    [N, k] (long)
     weights: [N, k]
     B:       [L, out]
@@ -878,35 +862,25 @@ def _apply_bias_grouped(topi, weights, B):
     """
     N, k = topi.shape
     out_dim = B.shape[1]
+    M = N * k
 
-    token_idx = torch.arange(N, device=topi.device).repeat_interleave(k)        # [N*k]
-    expert_idx = topi.reshape(-1)                                               # [N*k]
-    w_flat = weights.reshape(-1)                                                # [N*k]
+    token_idx  = torch.arange(N, device=topi.device).repeat_interleave(k)     # [M]
+    expert_idx = topi.reshape(-1)                                             # [M]
+    w_flat     = weights.reshape(-1).to(B.dtype)                              # [M]
 
-    expert_sorted, order = torch.sort(expert_idx)
-    token_sorted = token_idx.index_select(0, order)
-    w_sorted = w_flat.index_select(0, order)
-
-    changed = torch.ones_like(expert_sorted, dtype=torch.bool)
-    changed[1:] = expert_sorted[1:] != expert_sorted[:-1]
-    seg_starts = torch.nonzero(changed, as_tuple=False).flatten()
-    seg_ends = torch.empty_like(seg_starts)
-    seg_ends[:-1] = seg_starts[1:]
-    seg_ends[-1] = expert_sorted.numel()
-    used_experts = expert_sorted.index_select(0, seg_starts)
-
+    # Per-assignment bias contributions, then scatter-add
+    B_assign = B.index_select(0, expert_idx) * w_flat.unsqueeze(1)            # [M, out]
     y = B.new_zeros((N, out_dim))
-    for exp, s, e in zip(used_experts.tolist(), seg_starts.tolist(), seg_ends.tolist()):
-        idx = token_sorted[s:e]                 # [m]
-        ws = w_sorted[s:e].unsqueeze(1)        # [m, 1]
-        y.index_add_(0, idx, ws * B[exp].unsqueeze(0))  # [m, out]
+    y.index_add_(0, token_idx, B_assign)
     return y
+
+
 
 class FastLearnedCellX3(nn.Module):
     def __init__(self, D_in, H, D_out,
                  L_w1=12, L_w2=12, L_b2=12,
                  k1=3, k2=3, k3=3, tau1=1.0, tau2=1.0, tau3=1.0,
-                 d_addr=64,
+                 d_addr=32,
                  learn_addr=False,
                  learn_tape_w1=True, learn_tape_w2=True, learn_tape_b2=True):
         super().__init__()
