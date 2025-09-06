@@ -977,7 +977,7 @@ class FixedEmbedding(nn.Module):
         return self.weight[idx]
         
 @dataclass
-class GPTConfig:
+class VTEConfig:
     block_size: int = 1024
     vocab_size: int = 66 # GPT-2 vocab_size of 50257, padded up to nearest multiple of 64 for efficiency
     n_layer: int = 12
@@ -987,7 +987,7 @@ class GPTConfig:
     dropout: float = 0.1
 
         
-class GPT(nn.Module):
+class VirtualTurboEncabulator(nn.Module):
     def __init__(self, config):
         super().__init__()
         assert config.vocab_size is not None
