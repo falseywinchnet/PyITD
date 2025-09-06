@@ -781,8 +781,14 @@ ultra5 = UltraMemv5Classifier(
 
 
 
-#FastLearnedCellX3 is slower than ultracel or moduloMOE but smoother
+#FastLearnedCellX3 is fast and efficient routed attention
 
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from typing import Optional, Tuple,List
+import math
+import torch.nn.functional as F
 
 import math
 import torch
@@ -815,10 +821,9 @@ class RouterTopK(torch.autograd.Function):
 def router_topk(z, k, tau):
     return RouterTopK.apply(z, k, tau)
 
-
-def _apply_mixture_gemm_presort(x_flat, topi, weights, W):
+def _apply_mixture_grouped(x_flat, topi, weights, W):
     """
-    Enhanced GEMM path with per-row presorting and flat gather.
+    Group tokens by expert and do large GEMMs:
     x_flat:  [N, in]
     topi:    [N, k] (long)
     weights: [N, k]
@@ -829,49 +834,73 @@ def _apply_mixture_gemm_presort(x_flat, topi, weights, W):
     L, out_dim, in_dim_w = W.shape
     assert in_dim == in_dim_w
 
-    # 1) Per-row sort of expert ids to increase locality
-    topi_sorted, order = torch.sort(topi, dim=1)         # [N, k]
-    w_sorted = torch.gather(weights, 1, order)           # [N, k]
+    # Flatten assignments
+    k = topi.shape[1]
+    token_idx = torch.arange(N, device=topi.device).repeat_interleave(k)        # [N*k]
+    expert_idx = topi.reshape(-1)                                               # [N*k]
+    w_flat = weights.reshape(-1)                                                # [N*k]
 
-    # 2) Flat gather from [L, out*in] for better memory coalescing
-    W_flat = W.reshape(L, out_dim * in_dim)              # shares storage, no copy
-    # [N*k, out*in]
-    W_pick_flat = W_flat.index_select(0, topi_sorted.reshape(-1))
-    # [N, k, out*in]
-    W_pick_flat = W_pick_flat.view(N, -1, out_dim * in_dim)
+    # Sort by expert to form contiguous segments
+    expert_sorted, order = torch.sort(expert_idx)
+    token_sorted = token_idx.index_select(0, order)
+    w_sorted = w_flat.index_select(0, order)
 
-    # 3) Mix in flat space, then reshape once
-    # [N, out*in] = sum_k w_sorted * W_pick_flat
-    W_eff_flat = (w_sorted.unsqueeze(-1) * W_pick_flat).sum(dim=1)
-    # [N, out, in]
-    W_eff = W_eff_flat.view(N, out_dim, in_dim)
+    # Segment boundaries for each used expert
+    changed = torch.ones_like(expert_sorted, dtype=torch.bool)
+    changed[1:] = expert_sorted[1:] != expert_sorted[:-1]
+    seg_starts = torch.nonzero(changed, as_tuple=False).flatten()
+    seg_ends = torch.empty_like(seg_starts)
+    seg_ends[:-1] = seg_starts[1:]
+    seg_ends[-1] = expert_sorted.numel()
+    used_experts = expert_sorted.index_select(0, seg_starts)
 
-    # 4) Single bmm per token
-    return torch.bmm(W_eff, x_flat.unsqueeze(-1)).squeeze(-1)
+    y = x_flat.new_zeros(N, out_dim)
+
+    # Loop per used expert; usually small (<= L) and fast vs GEMM cost
+    for exp, s, e in zip(used_experts.tolist(), seg_starts.tolist(), seg_ends.tolist()):
+        idx = token_sorted[s:e]                        # [m]
+        ws = w_sorted[s:e].unsqueeze(1)               # [m, 1]
+        X = x_flat.index_select(0, idx)               # [m, in]
+        # y_e = X @ W[exp].T  (F.linear is faster/cleaner for row-major)
+        y_e = F.linear(X, W[exp])                      # [m, out]
+        y_e.mul_(ws)                                   # scale by gate weights (cheap: [m, out])
+        y.index_add_(0, idx, y_e)                      # scatter-accumulate
+    return y
 
 
-def _apply_bias_gemm_presort(topi, weights, B):
+def _apply_bias_grouped(topi, weights, B):
     """
-    Bias mixture with per-row presort and flat gather.
+    Bias via grouped adds (no big GEMM):
     topi:    [N, k] (long)
     weights: [N, k]
     B:       [L, out]
     return:  [N, out]
     """
     N, k = topi.shape
-    L, out_dim = B.shape
+    out_dim = B.shape[1]
 
-    topi_sorted, order = torch.sort(topi, dim=1)
-    w_sorted = torch.gather(weights, 1, order)
+    token_idx = torch.arange(N, device=topi.device).repeat_interleave(k)        # [N*k]
+    expert_idx = topi.reshape(-1)                                               # [N*k]
+    w_flat = weights.reshape(-1)                                                # [N*k]
 
-    # [N*k, out]
-    B_pick = B.index_select(0, topi_sorted.reshape(-1))
-    # [N, k, out]
-    B_pick = B_pick.view(N, k, out_dim)
+    expert_sorted, order = torch.sort(expert_idx)
+    token_sorted = token_idx.index_select(0, order)
+    w_sorted = w_flat.index_select(0, order)
 
-    # [N, out]
-    return (w_sorted.unsqueeze(-1) * B_pick).sum(dim=1)
+    changed = torch.ones_like(expert_sorted, dtype=torch.bool)
+    changed[1:] = expert_sorted[1:] != expert_sorted[:-1]
+    seg_starts = torch.nonzero(changed, as_tuple=False).flatten()
+    seg_ends = torch.empty_like(seg_starts)
+    seg_ends[:-1] = seg_starts[1:]
+    seg_ends[-1] = expert_sorted.numel()
+    used_experts = expert_sorted.index_select(0, seg_starts)
 
+    y = B.new_zeros((N, out_dim))
+    for exp, s, e in zip(used_experts.tolist(), seg_starts.tolist(), seg_ends.tolist()):
+        idx = token_sorted[s:e]                 # [m]
+        ws = w_sorted[s:e].unsqueeze(1)        # [m, 1]
+        y.index_add_(0, idx, ws * B[exp].unsqueeze(0))  # [m, out]
+    return y
 
 class FastLearnedCellX3(nn.Module):
     def __init__(self, D_in, H, D_out,
@@ -942,18 +971,15 @@ class FastLearnedCellX3(nn.Module):
         x_addr = self.P(x_flat)                                        # [N, d_addr]
         (i1, w1), (i2, w2), (i3, w3) = self._address(x_addr)
 
-        # FC1: presorted flat-gather + 1 bmm per token
-        h = _apply_mixture_gemm_presort(x_flat, i1, w1, self.W1)       # [N, H]
+        h = _apply_mixture_grouped(x_flat, i1, w1, self.W1)  # [N, H]
         h = self.act(h)
 
-        # FC2: same trick
-        y = _apply_mixture_gemm_presort(h, i2, w2, self.W2)            # [N, D_out]
-
-        # Bias: presorted flat-gather
-        y = y + _apply_bias_gemm_presort(i3, w3, self.b2)
+        
+        y = _apply_mixture_grouped(h, i2, w2, self.W2)       # [N, D_out]
+        y = y + _apply_bias_grouped(i3, w3, self.b2)
+      
 
         return y.view(B, T, self.D_out) if x.ndim == 3 else y
-
 
 
 ultra_model = FastLearnedCellX3(D_in=X_train.shape[1],H=X_train.shape[1]*2,D_out=X_train.shape[1])
