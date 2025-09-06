@@ -4,12 +4,12 @@
 from __future__ import annotations
 import math
 import typing
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from dataclasses import dataclass
-from typing import Dict, Tuple
+from typing import Dict, Tuple,Optional, List
+
 
 class Cell(nn.Module):
     def __init__(self, dim_in: int, hidden: int):
@@ -34,18 +34,6 @@ class RecurrentMLP(nn.Module):
             z = z + self.cells_a[i](z)
         return z
 
-
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from typing import Optional, Tuple,List
-import math
-import torch.nn.functional as F
-
-import math
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
 
 # Sparse-gradient router; gradients only to chosen k logits
 class RouterTopK(torch.autograd.Function):
@@ -221,8 +209,6 @@ class FastLearnedCellX3(nn.Module):
       
 
         return y.view(B, T, self.D_out) if x.ndim == 3 else y
-
-
 
 
         
@@ -765,7 +751,7 @@ class ManifoldAttentionNoAttn(nn.Module):
         self.ln = TanhNorm(config.n_embd)
         self.attn = LocalSelfAttention(config)
         self.decoderattn = Cell(config.n_embd,config.n_embd*2)
-        
+        self.r_selective = math.ceil(rank / 2)#get from attn only for attn need, casual masked receptive field
         self.shift = LowRankShift(self.d_model, shift_rank) if shift_rank > 0 else None
         self.out = nn.Linear(self.d_model, self.d_model, bias=False)
         self.dropout = nn.Dropout(config.dropout)
@@ -774,7 +760,8 @@ class ManifoldAttentionNoAttn(nn.Module):
         """x: [B, T, D] -> y: [B, T, D]"""
         B, T, D = x.shape
         assert D == self.d_model
-        x_attn = self.attn(x)
+        x_attn = x + self.decoderattn(self.attn(x))
+        #obtain local information vectors
 
         # Anchor vector (no large allocs)
         anchor = torch.zeros(B, D, device=x.device, dtype=x.dtype)
@@ -827,7 +814,7 @@ class ManifoldAttentionNoAttn(nn.Module):
         traces = torch.matmul(xprime, V)  # [B, T, r]
         tracesa = torch.matmul(x_attncprime, V2)  # [B, T, r]
         R = traces.shape[2]
-        traces = torch.cat([traces[..., :R//2], tracesa[..., R//2:]], dim=-1)        
+        traces = torch.cat([traces[..., :-self.r_selective], tracesa[..., -self.r_selective:]], dim=-1)        
         # Analytic conditioning
         traces_n, scales = energy_normalize(traces, eps=self.eps)
         traces_n = soft_shrink(traces_n, self.shrink_lambda)
@@ -842,7 +829,7 @@ class ManifoldAttentionNoAttn(nn.Module):
         traces_final = traces_n * scales
 
         # Recompose
-        Vmix = torch.cat([V[:, :, : R//2], V2[:, :, R - R//2 :]], dim=-1)
+        Vmix = torch.cat([V[:, :, :-self.r_selective], V2[:, :, - self.r_selective :]], dim=-1)
         # ...
         x_tilde = torch.matmul(traces_final, Vmix.transpose(1, 2))
         # Undo shift and add anchor
@@ -978,9 +965,9 @@ class BlockFast(nn.Module):
 
         self.distance  =PhaseTransport(1) 
         #add second order metadata only on first layer
-        self.ln = nn.LayerNorm(config.n_embd)
+        self.ln = TanhNorm(config.n_embd)
         self.convolve  = ManifoldAttentionNoAttn(
-                config, rank=32, K=3,
+                config, rank=24, K=3,
                 shift_rank=12, shrink_lambda=0.01,
                 causal=False, ar_rho=0.0, eps=1e-5)
         
@@ -1010,7 +997,7 @@ class VTEConfig:
     block_size: int = 1024
     vocab_size: int = 66
     n_layer: int = 12
-    n_embd: int = 256
+    n_embd: int = 128
     n_head:int = 8
     bias: bool = True
     dropout: float = 0.1
