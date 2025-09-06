@@ -71,94 +71,83 @@ class RouterTopK(torch.autograd.Function):
         return grad_z, None, None
 
 def router_topk(z, k, tau):
+    if k == 1:
+        topi = z.argmax(dim=1, keepdim=True)                     # [N,1]
+        w = torch.ones(z.size(0), 1, device=z.device, dtype=z.dtype)
+        return topi, w
     return RouterTopK.apply(z, k, tau)
 
 def _apply_mixture_grouped(x_flat, topi, weights, W):
-    """
-    Group tokens by expert and do large GEMMs:
-    x_flat:  [N, in]
-    topi:    [N, k] (long)
-    weights: [N, k]
-    W:       [L, out, in]
-    return:  [N, out]
-    """
     N, in_dim = x_flat.shape
     L, out_dim, in_dim_w = W.shape
     assert in_dim == in_dim_w
 
-    # Flatten assignments
-    k = topi.shape[1]
-    token_idx = torch.arange(N, device=topi.device).repeat_interleave(k)        # [N*k]
-    expert_idx = topi.reshape(-1)                                               # [N*k]
-    w_flat = weights.reshape(-1)                                                # [N*k]
+    if topi.size(1) == 1:  # fast path
+        token_idx = torch.arange(N, device=topi.device)
+        expert_idx = topi.squeeze(1)
+        w_flat = weights.squeeze(1)  # all ones from router_topk fast path
+    else:
+        k = topi.shape[1]
+        token_idx = torch.arange(N, device=topi.device).repeat_interleave(k)
+        expert_idx = topi.reshape(-1)
+        w_flat = weights.reshape(-1)
 
-    # Sort by expert to form contiguous segments
     expert_sorted, order = torch.sort(expert_idx)
     token_sorted = token_idx.index_select(0, order)
     w_sorted = w_flat.index_select(0, order)
 
-    # Segment boundaries for each used expert
     changed = torch.ones_like(expert_sorted, dtype=torch.bool)
     changed[1:] = expert_sorted[1:] != expert_sorted[:-1]
     seg_starts = torch.nonzero(changed, as_tuple=False).flatten()
-    seg_ends = torch.empty_like(seg_starts)
-    seg_ends[:-1] = seg_starts[1:]
-    seg_ends[-1] = expert_sorted.numel()
+    seg_ends = torch.empty_like(seg_starts); seg_ends[:-1] = seg_starts[1:]; seg_ends[-1] = expert_sorted.numel()
     used_experts = expert_sorted.index_select(0, seg_starts)
 
     y = x_flat.new_zeros(N, out_dim)
-
-    # Loop per used expert; usually small (<= L) and fast vs GEMM cost
     for exp, s, e in zip(used_experts.tolist(), seg_starts.tolist(), seg_ends.tolist()):
-        idx = token_sorted[s:e]                        # [m]
-        ws = w_sorted[s:e].unsqueeze(1)               # [m, 1]
-        X = x_flat.index_select(0, idx)               # [m, in]
-        # y_e = X @ W[exp].T  (F.linear is faster/cleaner for row-major)
-        y_e = F.linear(X, W[exp])                      # [m, out]
-        y_e.mul_(ws)                                   # scale by gate weights (cheap: [m, out])
-        y.index_add_(0, idx, y_e)                      # scatter-accumulate
+        idx = token_sorted[s:e]
+        X = x_flat.index_select(0, idx)
+        y_e = F.linear(X, W[exp])                 # [m, out]
+        if topi.size(1) != 1:                     # skip multiply when weights==1
+            y_e.mul_(w_sorted[s:e].unsqueeze(1))
+        y.index_add_(0, idx, y_e)
     return y
 
-
 def _apply_bias_grouped(topi, weights, B):
-    """
-    Bias via grouped adds (no big GEMM):
-    topi:    [N, k] (long)
-    weights: [N, k]
-    B:       [L, out]
-    return:  [N, out]
-    """
     N, k = topi.shape
     out_dim = B.shape[1]
-
-    token_idx = torch.arange(N, device=topi.device).repeat_interleave(k)        # [N*k]
-    expert_idx = topi.reshape(-1)                                               # [N*k]
-    w_flat = weights.reshape(-1)                                                # [N*k]
-
+    if k == 1:
+        token_idx = torch.arange(N, device=topi.device)
+        expert_idx = topi.squeeze(1)
+        w_flat = weights.squeeze(1)               # ones
+    else:
+        token_idx = torch.arange(N, device=topi.device).repeat_interleave(k)
+        expert_idx = topi.reshape(-1)
+        w_flat = weights.reshape(-1)
     expert_sorted, order = torch.sort(expert_idx)
     token_sorted = token_idx.index_select(0, order)
     w_sorted = w_flat.index_select(0, order)
-
     changed = torch.ones_like(expert_sorted, dtype=torch.bool)
     changed[1:] = expert_sorted[1:] != expert_sorted[:-1]
     seg_starts = torch.nonzero(changed, as_tuple=False).flatten()
-    seg_ends = torch.empty_like(seg_starts)
-    seg_ends[:-1] = seg_starts[1:]
-    seg_ends[-1] = expert_sorted.numel()
+    seg_ends = torch.empty_like(seg_starts); seg_ends[:-1] = seg_starts[1:]; seg_ends[-1] = expert_sorted.numel()
     used_experts = expert_sorted.index_select(0, seg_starts)
 
     y = B.new_zeros((N, out_dim))
     for exp, s, e in zip(used_experts.tolist(), seg_starts.tolist(), seg_ends.tolist()):
-        idx = token_sorted[s:e]                 # [m]
-        ws = w_sorted[s:e].unsqueeze(1)        # [m, 1]
-        y.index_add_(0, idx, ws * B[exp].unsqueeze(0))  # [m, out]
+        idx = token_sorted[s:e]
+        if k == 1:
+            m = idx.size(0)
+            y.index_add_(0, idx, B[exp].unsqueeze(0).expand(m, -1))
+        else:
+            ws = w_sorted[s:e].unsqueeze(1)
+            y.index_add_(0, idx, ws * B[exp].unsqueeze(0))
     return y
 
 class FastLearnedCellX3(nn.Module):
     def __init__(self, D_in, H, D_out,
                  L_w1=12, L_w2=12, L_b2=12,
                  k1=3, k2=3, k3=3, tau1=1.0, tau2=1.0, tau3=1.0,
-                 d_addr=64,
+                 d_addr=32,
                  learn_addr=False,
                  learn_tape_w1=True, learn_tape_w2=True, learn_tape_b2=True):
         super().__init__()
@@ -232,6 +221,7 @@ class FastLearnedCellX3(nn.Module):
       
 
         return y.view(B, T, self.D_out) if x.ndim == 3 else y
+
 
 
 
@@ -555,20 +545,46 @@ def _batch_eye(n: int, batch: int, device: torch.device, dtype: torch.dtype) -> 
     return I.unsqueeze(0).expand(batch, n, n)
 
 
-def orthonorm_columns(V: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
-    """Orthonormalize columns of V with batched QR.
-
-    V: [B, D, r]  -> returns Q: [B, D, r] with Q^T Q = I_r
+def orthonorm_columns(V: torch.Tensor, eps: float = 1e-6, upcast_fp32: bool = True) -> torch.Tensor:
     """
-    # torch.linalg.qr supports batched input
-    Q, R = torch.linalg.qr(V, mode="reduced")
-    # Ensure a consistent sign by forcing diag(R) positive where possible
-    diag = torch.diagonal(R, dim1=-2, dim2=-1)
-    sgn = torch.sign(diag + eps).unsqueeze(-2)  # [B, 1, r]
-    Q = Q * sgn
-    return Q
+    Orthonormalize columns of V via batched Cholesky.
+    V: [B, D, r] with r <= D
+    Returns Q: [B, D, r] s.t. Q^T Q ≈ I_r
+    """
+    B, D, r = V.shape
+    assert r <= D, f"Need r <= D, got r={r}, D={D}"
 
+    dtype_in = V.dtype
+    X = V.to(torch.float32) if upcast_fp32 and V.dtype in (torch.float16, torch.bfloat16) else V
 
+    # Gram and ridge (scaled per-batch)
+    G = X.transpose(-2, -1) @ X                     # [B, r, r]
+    eye = torch.eye(r, dtype=X.dtype, device=X.device).expand(B, r, r)
+    diag_mean = torch.diagonal(G, dim1=-2, dim2=-1).mean(dim=-1, keepdim=True)[..., None]  # [B,1,1]
+    ridge = (eps + 1e-12) * (1.0 + diag_mean)       # keep >0 even if G≈0
+    G = G + ridge * eye
+
+    # Robust Cholesky with small backoff if needed
+    L, info = torch.linalg.cholesky_ex(G)
+    if torch.any(info > 0):
+        # Increase ridge for the failing batches
+        for _ in range(3):
+            bad = (info > 0).view(B, 1, 1)
+            G = torch.where(bad, G + 10.0 * ridge * eye, G)
+            L, info = torch.linalg.cholesky_ex(G)
+            if not torch.any(info > 0):
+                break
+        if torch.any(info > 0):
+            # Last-resort CPU QR fallback (rare)
+            Q_cpu, R_cpu = torch.linalg.qr(V.detach().cpu(), mode="reduced")
+            Q = Q_cpu.to(V.device, dtype=dtype_in)
+            return Q
+
+    # Q = V @ L^{-1} via triangular solve
+    Y = torch.linalg.solve_triangular(L, X.transpose(-2, -1), upper=False)  # [B, r, D]
+    Q = Y.transpose(-2, -1)                                                 # [B, D, r]
+    return Q.to(dtype_in)
+    
 def subspace_iteration(C: torch.Tensor, r: int, K: int, V0: Optional[torch.Tensor] = None,
                        eps: float = 1e-6) -> torch.Tensor:
     """
@@ -747,7 +763,9 @@ class ManifoldAttentionNoAttn(nn.Module):
         self.ar_rho = float(ar_rho)
         self.eps = float(eps)
         self.ln = TanhNorm(config.n_embd)
-
+        self.attn = LocalSelfAttention(config)
+        self.decoderattn = Cell(config.n_embd,config.n_embd*2)
+        
         self.shift = LowRankShift(self.d_model, shift_rank) if shift_rank > 0 else None
         self.out = nn.Linear(self.d_model, self.d_model, bias=False)
         self.dropout = nn.Dropout(config.dropout)
@@ -756,6 +774,7 @@ class ManifoldAttentionNoAttn(nn.Module):
         """x: [B, T, D] -> y: [B, T, D]"""
         B, T, D = x.shape
         assert D == self.d_model
+        x_attn = self.attn(x)
 
         # Anchor vector (no large allocs)
         anchor = torch.zeros(B, D, device=x.device, dtype=x.dtype)
@@ -763,17 +782,20 @@ class ManifoldAttentionNoAttn(nn.Module):
 
         # Center
         xc = x - anchor.unsqueeze(1)  # broadcast over T
-
+        x_attnc = x_attn - anchor.unsqueeze(1)
         # Optional low-rank de-normalization shift; avoid adding zeros if not needed
         if self.shift is not None:
             s = self.shift(x)
             xprime = xc + s
+            x_attncprime = x_attnc + s
         else:
             s = None
             xprime = xc
+            x_attncprime = x_attnc
 
         # Shapes
         xt = xprime.transpose(1, 2)  # [B, D, T]
+        xta = x_attncprime.transpose(1, 2)  # [B, D, T]
 
         # Optimized: linear operator form with the SAME init as covariance path
         # Build V0 as first r columns of the identity, expanded over batch
@@ -788,13 +810,24 @@ class ManifoldAttentionNoAttn(nn.Module):
         V = subspace_iteration_linop(
             cov_matvec, D, self.rank, self.K, V0=E, eps=self.eps
         )
+        def cov_matvec_a(V2):  # V: [B, D, r] -> [B, D, r]
+            Y = torch.matmul(x_attncprime, V2)           # [B, T, r]
+            Z = torch.matmul(xta, Y) / float(T)    # [B, D, r]
+            return Z + self.eps * V2
+
+        V2 = subspace_iteration_linop(
+            cov_matvec_a, D, self.rank, self.K, V0=E, eps=self.eps
+        )
 
         # Sign alignment using anchor token
         V = sign_align(V, anchor)  # [B, D, r]
+        V2 = sign_align(V2, anchor)  # [B, D, r]
 
         # Project to r scalar traces over time: [B, T, r]
         traces = torch.matmul(xprime, V)  # [B, T, r]
-
+        tracesa = torch.matmul(x_attncprime, V2)  # [B, T, r]
+        R = traces.shape[2]
+        traces = torch.cat([traces[..., :R//2], tracesa[..., R//2:]], dim=-1)        
         # Analytic conditioning
         traces_n, scales = energy_normalize(traces, eps=self.eps)
         traces_n = soft_shrink(traces_n, self.shrink_lambda)
@@ -809,8 +842,9 @@ class ManifoldAttentionNoAttn(nn.Module):
         traces_final = traces_n * scales
 
         # Recompose
-        x_tilde = torch.matmul(traces_final, V.transpose(1, 2))  # [B, T, D]
-
+        Vmix = torch.cat([V[:, :, : R//2], V2[:, :, R - R//2 :]], dim=-1)
+        # ...
+        x_tilde = torch.matmul(traces_final, Vmix.transpose(1, 2))
         # Undo shift and add anchor
         if s is not None:
             x_hat = x_tilde - s + anchor.unsqueeze(1)
@@ -880,11 +914,11 @@ class LocalSelfAttention(nn.Module):
 
         # q, k, v and split heads
         q, k, v = self.c_attn(x).split(self.n_embd, dim=2)
-        s = [q,k,v]
+        s=[q,k,v]
         s = self.dynmix(s)
         q = s[0]
         k = s[1]
-        #v= s[2] #do not mix V!
+        #v= s[2] dont mix v
         q = q.view(B, T, self.n_head, self.head_dim).transpose(1, 2)  # (B, H, T, Dh)
         k = k.view(B, T, self.n_head, self.head_dim).transpose(1, 2)  # (B, H, T, Dh)
         v = v.view(B, T, self.n_head, self.head_dim).transpose(1, 2)  # (B, H, T, Dh)
@@ -937,31 +971,26 @@ class LocalSelfAttention(nn.Module):
 
 
 class BlockFast(nn.Module):
-    def __init__(self, config,d):
+    def __init__(self, config):
         super().__init__()
-        self.encoder =FastLearnedCellX3(D_in=config.n_embd,H=config.n_embd*2,D_out=config.n_embd)
-        self.decoder = FastLearnedCellX3(D_in=config.n_embd,H=config.n_embd*2,D_out=config.n_embd)
-        self.decoder_attn = FastLearnedCellX3(D_in=config.n_embd,H=config.n_embd*2,D_out=config.n_embd)
-        #note- CANNOT share with decoder for far field.
-        #projection is different, codebook needs to be different.
-        #input should be shared.
+        self.encode = Cell(config.n_embd,config.n_embd*2)
+        self.decode = Cell(config.n_embd,config.n_embd*2)
 
-        self.attn = LocalSelfAttention(config)
-        self.distance  =PhaseTransport(1)
-        self.ln = TanhNorm(config.n_embd)
+        self.distance  =PhaseTransport(1) 
+        #add second order metadata only on first layer
+        self.ln = nn.LayerNorm(config.n_embd)
         self.convolve  = ManifoldAttentionNoAttn(
-                config, rank=16 if d%2 else 8, K=3,
+                config, rank=32, K=3,
                 shift_rank=12, shrink_lambda=0.01,
                 causal=False, ar_rho=0.0, eps=1e-5)
         
     def forward(self, x):
         B,T,C= x.shape
-        prod = self.distance(self.ln(x))
-        prod = prod + self.encoder(prod)
-        prod = prod + self.decoder(self.convolve(prod)) + self.decoder_attn(self.attn(prod))
-        x = x + prod
-
-        return x
+        x = self.ln(x)
+        q = self.distance(x)
+        a = x+ self.encode(q)
+        a = a + self.decode(self.convolve(a))
+        return a
 
 class FixedEmbedding(nn.Module):
     def __init__(self, num_embeddings, embedding_dim, seed=0):
@@ -979,9 +1008,9 @@ class FixedEmbedding(nn.Module):
 @dataclass
 class VTEConfig:
     block_size: int = 1024
-    vocab_size: int = 66 # GPT-2 vocab_size of 50257, padded up to nearest multiple of 64 for efficiency
+    vocab_size: int = 66
     n_layer: int = 12
-    n_embd: int = 128
+    n_embd: int = 256
     n_head:int = 8
     bias: bool = True
     dropout: float = 0.1
@@ -997,7 +1026,7 @@ class VirtualTurboEncabulator(nn.Module):
 
         self.transformer = nn.ModuleDict(dict(
             wte = FixedEmbedding(config.vocab_size, config.n_embd),
-            h = nn.ModuleList([BlockFast(config,1+i) for i in range(config.n_layer)]),
+            h = nn.ModuleList([BlockFast(config) for _ in range(config.n_layer)]),
 
 
         ))
