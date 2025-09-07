@@ -828,58 +828,87 @@ class AutoencoderBlock(nn.Module):
         q = self.dec2(self.enc1(x)) - self.dec1(self.enc2(x)) 
         return q + z1 + z2
 
+import math
+import torch
+import torch.nn as nn
+
 class ScaledAutoencoderBlock(nn.Module):
-    def __init__(self, config):
+    """
+    Canon form:
+      output =  sum_i [ dec_i( conv_i( enc_i( distance(ln(x)) ) ) ) ]
+              + sum_{i<j} [ dec_j( enc_i(x) ) - dec_i( enc_j(x) ) ] / sqrt(num_pairs)
+
+    - Local paths operate on z = distance(ln(x)).
+    - Cross paths operate on raw x, exactly matching your 2-branch inversion.
+    - Antisymmetric cross term ensures a centered interaction basis.
+    - O(K^2) in decodes for the cross term by design, since that is the canon.
+    """
+
+    def __init__(self, config,
+                 convolve_ctor=None,
+                 convolve_kwargs=None,
+                 cross_scale=True):
         super().__init__()
+
         self.K = config.n_experts
-        self.distance = PhaseTransport(1)
+
+        assert  self.K >= 2
+        self.cross_scale = cross_scale
+
+        # input preproc
         self.ln = nn.LayerNorm(config.n_embd)
+        self.distance = PhaseTransport(1)
 
-        self.encs = nn.ModuleList([RecurrentMLP(config.n_embd) for _ in range(K)])
-        self.convs = nn.ModuleList([
-            ManifoldAttentionNoAttn(config, d_model=config.n_embd, rank=16, K=3,
-                                    shift_rank=8, shrink_lambda=0.01,
-                                    causal=False, ar_rho=0.0, eps=1e-5,
-                                    dropout=0.0, use_layernorm=True)
-            for _ in range(K)
-        ])
-        self.decs = nn.ModuleList([RecurrentMLP(config.n_embd) for _ in range(K)])
+        # branch modules
+        self.encs = nn.ModuleList([RecurrentMLP(config.n_embd) for _ in range(self.K)])
+        if convolve_ctor is None:
+            convolve_ctor = ManifoldAttentionNoAttn
+        if convolve_kwargs is None:
+            convolve_kwargs = dict(
+                d_model=config.n_embd, rank=16, K=3,
+                shift_rank=8, shrink_lambda=0.01,
+                causal=False, ar_rho=0.0, eps=1e-5,
+                dropout=config.dropout, use_layernorm=True
+            )
+        self.convs = nn.ModuleList([convolve_ctor(config, **convolve_kwargs) for _ in range(self.K)])
+        self.decs = nn.ModuleList([RecurrentMLP(config.n_embd) for _ in range(self.K)])
 
-        # antisymmetric mixing
-        self.B = nn.Parameter(torch.zeros(K, K))  # A = B - B^T
+        # optional learned scalers for stability
         self.alpha_local = nn.Parameter(torch.tensor(1.0))
         self.alpha_cross = nn.Parameter(torch.tensor(1.0))
 
+        # final LN to keep things well behaved
         self.out_ln = nn.LayerNorm(config.n_embd)
 
     def forward(self, x):
+        # centered stream for local paths
         z = self.distance(self.ln(x))
 
-        # precompute encodings and local paths
-        encs = [enc(z) for enc in self.encs]                      # K items
-        locals_ = [self.decs[i](self.convs[i](encs[i])) for i in range(self.K)]
-        s = torch.stack(locals_).sum(dim=0)
+        # encodings on z for locals, on x for cross
+        Ez = [enc(z) for enc in self.encs]   # list length K
+        Ex = [enc(x) for enc in self.encs]   # list length K
 
-        # antisymmetric mixing (no self terms on diagonal)
-        A = self.B - self.B.transpose(0, 1)
-        A = A - torch.diag(torch.diag(A))
-
-        # build mixed encodings and decode once per branch
-        # m_i = sum_j A[i,j] * encs[j]
-        mix = []
+        # symmetric local sum: sum_i dec_i(conv_i(enc_i(z)))
+        local_terms = []
         for i in range(self.K):
-            acc = 0
-            for j in range(self.K):
-                if i == j: 
-                    continue
-                acc = acc + A[i, j] * encs[j]
-            mix.append(acc)
+            u = self.convs[i](Ez[i])
+            local_terms.append(self.decs[i](u))
+        local_sum = torch.stack(local_terms, dim=0).sum(dim=0)
 
-        cross = torch.stack([self.decs[i](mix[i]) for i in range(self.K)]).sum(dim=0)
+        # antisymmetric cross sum: sum_{i<j} [ dec_j(enc_i(x)) - dec_i(enc_j(x)) ]
+        cross_sum = 0
+        num_pairs = self.K * (self.K - 1) // 2
+        for i in range(self.K):
+            ei = Ex[i]
+            for j in range(i + 1, self.K):
+                ej = Ex[j]
+                cross_sum = cross_sum + (self.decs[j](ei) - self.decs[i](ej))
 
-        # scale to keep variance in check
-        out = self.out_ln(self.alpha_local * s + self.alpha_cross * cross / math.sqrt(self.K))
-        return out
+        if self.cross_scale and num_pairs > 0:
+            cross_sum = cross_sum / math.sqrt(num_pairs)
+
+        y = self.alpha_local * local_sum + self.alpha_cross * cross_sum
+        return self.out_ln(y)
         
 class FixedEmbedding(nn.Module):
     def __init__(self, num_embeddings, embedding_dim, seed=0):
