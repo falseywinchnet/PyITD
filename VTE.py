@@ -33,6 +33,18 @@ class RecurrentMLP(nn.Module):
         for i in range(self.k):
             z = z + self.cells_a[i](z)
         return z
+        
+class RecurrentMLP_shrink(nn.Module):
+    def __init__(self, dim_in: int):
+        super().__init__()
+        self.k = 2 #can set to 3, but marginal gains
+        self.hidden = dim_in//2 #if overfitting reduce to dim_in or even dim_in//2
+        self.cells_a = nn.ModuleList([Cell(dim_in, self.hidden) for _ in range(self.k)])
+    def forward(self, x):
+        z = x
+        for i in range(self.k):
+            z = z + self.cells_a[i](z)
+        return z
 
 
 # Sparse-gradient router; gradients only to chosen k logits
@@ -531,45 +543,19 @@ def _batch_eye(n: int, batch: int, device: torch.device, dtype: torch.dtype) -> 
     return I.unsqueeze(0).expand(batch, n, n)
 
 
-def orthonorm_columns(V: torch.Tensor, eps: float = 1e-6, upcast_fp32: bool = True) -> torch.Tensor:
+def orthonorm_columns(V: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+    """Orthonormalize columns of V with batched QR.
+
+    V: [B, D, r]  -> returns Q: [B, D, r] with Q^T Q = I_r
     """
-    Orthonormalize columns of V via batched Cholesky.
-    V: [B, D, r] with r <= D
-    Returns Q: [B, D, r] s.t. Q^T Q ≈ I_r
-    """
-    B, D, r = V.shape
-    assert r <= D, f"Need r <= D, got r={r}, D={D}"
+    # torch.linalg.qr supports batched input
+    Q, R = torch.linalg.qr(V, mode="reduced")
+    # Ensure a consistent sign by forcing diag(R) positive where possible
+    diag = torch.diagonal(R, dim1=-2, dim2=-1)
+    sgn = torch.sign(diag + eps).unsqueeze(-2)  # [B, 1, r]
+    Q = Q * sgn
+    return Q
 
-    dtype_in = V.dtype
-    X = V.to(torch.float32) if upcast_fp32 and V.dtype in (torch.float16, torch.bfloat16) else V
-
-    # Gram and ridge (scaled per-batch)
-    G = X.transpose(-2, -1) @ X                     # [B, r, r]
-    eye = torch.eye(r, dtype=X.dtype, device=X.device).expand(B, r, r)
-    diag_mean = torch.diagonal(G, dim1=-2, dim2=-1).mean(dim=-1, keepdim=True)[..., None]  # [B,1,1]
-    ridge = (eps + 1e-12) * (1.0 + diag_mean)       # keep >0 even if G≈0
-    G = G + ridge * eye
-
-    # Robust Cholesky with small backoff if needed
-    L, info = torch.linalg.cholesky_ex(G)
-    if torch.any(info > 0):
-        # Increase ridge for the failing batches
-        for _ in range(3):
-            bad = (info > 0).view(B, 1, 1)
-            G = torch.where(bad, G + 10.0 * ridge * eye, G)
-            L, info = torch.linalg.cholesky_ex(G)
-            if not torch.any(info > 0):
-                break
-        if torch.any(info > 0):
-            # Last-resort CPU QR fallback (rare)
-            Q_cpu, R_cpu = torch.linalg.qr(V.detach().cpu(), mode="reduced")
-            Q = Q_cpu.to(V.device, dtype=dtype_in)
-            return Q
-
-    # Q = V @ L^{-1} via triangular solve
-    Y = torch.linalg.solve_triangular(L, X.transpose(-2, -1), upper=False)  # [B, r, D]
-    Q = Y.transpose(-2, -1)                                                 # [B, D, r]
-    return Q.to(dtype_in)
     
 def subspace_iteration(C: torch.Tensor, r: int, K: int, V0: Optional[torch.Tensor] = None,
                        eps: float = 1e-6) -> torch.Tensor:
@@ -661,21 +647,6 @@ def soft_shrink(x: torch.Tensor, lam: float) -> torch.Tensor:
     return torch.sign(x) * F.gelu(torch.abs(x) - lam)
 
 
-def ar1_filter(x: torch.Tensor, rho: float) -> torch.Tensor:
-    """Causal AR(1) smoothing along time dimension for each component independently.
-
-    x: [B, T, r], rho in [0,1)
-    returns y of same shape
-    """
-    if rho <= 0.0:
-        return x
-    B, T, r = x.shape
-    y = torch.zeros_like(x)
-    y[:, 0, :] = x[:, 0, :]
-    for t in range(1, T):
-        y[:, t, :] = rho * y[:, t - 1, :] + (1.0 - rho) * x[:, t, :]
-    return y
-
 
 class LowRankShift(nn.Module):
     """Low-rank residual shift S(X) = U sigma(V^T X) applied per time step.
@@ -699,7 +670,7 @@ class LowRankShift(nn.Module):
         return s
 
 
-        
+
 def subspace_iteration_linop(matvec, d, rank, K, V0, eps: float = 1e-6):
     """
     Batched subspace iteration using a linear-operator matvec.
@@ -714,22 +685,13 @@ def subspace_iteration_linop(matvec, d, rank, K, V0, eps: float = 1e-6):
         Z = matvec(V)                  # [B, d, r]
         V = orthonorm_columns(Z, eps)  # match covariance path behavior
     return V
-    
-#https://arxiv.org/pdf/2503.10622
-class TanhNorm(nn.Module):
-    def __init__(self, C):
-        super().__init__()
-        self.scale = nn.Parameter(torch.ones(1) * 0.9)
-        self.delta = nn.Parameter(torch.ones(C))
-        self.bias = nn.Parameter(torch.zeros(C))
-    def forward(self, x):
-        x = F.tanh(self.scale * x)
-        return self.delta * x + self.bias
-        
+
+
 class ManifoldAttentionNoAttn(nn.Module):
     def __init__(
         self,
         config,
+        d_model: int,
         rank: int,
         K: int = 2,
         shift_rank: int = 0,
@@ -737,10 +699,12 @@ class ManifoldAttentionNoAttn(nn.Module):
         causal: bool = False,
         ar_rho: float = 0.0,
         eps: float = 1e-5,
+        dropout: float = 0.0,
+        use_layernorm: bool = True,
     ) -> None:
         super().__init__()
         assert rank > 0 and K >= 1
-        self.d_model = config.n_embd
+        self.d_model = d_model
         self.rank = rank                # <-- fix: respect constructor
         self.K = K
         self.shift_rank = shift_rank
@@ -748,20 +712,17 @@ class ManifoldAttentionNoAttn(nn.Module):
         self.causal = bool(causal)
         self.ar_rho = float(ar_rho)
         self.eps = float(eps)
-        self.ln = TanhNorm(config.n_embd)
-        self.attn = LocalSelfAttention(config)
-        self.decoderattn = Cell(config.n_embd,config.n_embd*2)
-        self.r_selective = math.ceil(rank / 2)#get from attn only for attn need, casual masked receptive field
-        self.shift = LowRankShift(self.d_model, shift_rank) if shift_rank > 0 else None
-        self.out = nn.Linear(self.d_model, self.d_model, bias=False)
-        self.dropout = nn.Dropout(config.dropout)
+
+        self.shift = LowRankShift(d_model, shift_rank) if shift_rank > 0 else None
+        self.out = nn.Linear(d_model, d_model, bias=False)
+        self.dropout = nn.Dropout(dropout)
+        self.ln = nn.LayerNorm(d_model) if use_layernorm else nn.Identity()
         self.dynmix = SpiralMix(1)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """x: [B, T, D] -> y: [B, T, D]"""
         B, T, D = x.shape
         assert D == self.d_model
-        x_attn = x + self.decoderattn(self.attn(x))
-        #obtain local information vectors
 
         # Anchor vector (no large allocs)
         anchor = torch.zeros(B, D, device=x.device, dtype=x.dtype)
@@ -769,20 +730,17 @@ class ManifoldAttentionNoAttn(nn.Module):
 
         # Center
         xc = x - anchor.unsqueeze(1)  # broadcast over T
-        x_attnc = x_attn - anchor.unsqueeze(1)
+
         # Optional low-rank de-normalization shift; avoid adding zeros if not needed
         if self.shift is not None:
             s = self.shift(x)
             xprime = xc + s
-            x_attncprime = x_attnc + s
         else:
             s = None
             xprime = xc
-            x_attncprime = x_attnc
 
         # Shapes
         xt = xprime.transpose(1, 2)  # [B, D, T]
-        xta = x_attncprime.transpose(1, 2)  # [B, D, T]
 
         # Optimized: linear operator form with the SAME init as covariance path
         # Build V0 as first r columns of the identity, expanded over batch
@@ -797,24 +755,13 @@ class ManifoldAttentionNoAttn(nn.Module):
         V = subspace_iteration_linop(
             cov_matvec, D, self.rank, self.K, V0=E, eps=self.eps
         )
-        def cov_matvec_a(V2):  # V: [B, D, r] -> [B, D, r]
-            Y = torch.matmul(x_attncprime, V2)           # [B, T, r]
-            Z = torch.matmul(xta, Y) / float(T)    # [B, D, r]
-            return Z + self.eps * V2
-
-        V2 = subspace_iteration_linop(
-            cov_matvec_a, D, self.rank, self.K, V0=E, eps=self.eps
-        )
 
         # Sign alignment using anchor token
         V = sign_align(V, anchor)  # [B, D, r]
-        V2 = sign_align(V2, anchor)  # [B, D, r]
 
         # Project to r scalar traces over time: [B, T, r]
         traces = torch.matmul(xprime, V)  # [B, T, r]
-        tracesa = torch.matmul(x_attncprime, V2)  # [B, T, r]
-        R = traces.shape[2]
-        traces = torch.cat([traces[..., :-self.r_selective], tracesa[..., -self.r_selective:]], dim=-1)        
+
         # Analytic conditioning
         traces_n, scales = energy_normalize(traces, eps=self.eps)
         traces_n = soft_shrink(traces_n, self.shrink_lambda)
@@ -829,156 +776,111 @@ class ManifoldAttentionNoAttn(nn.Module):
         traces_final = traces_n * scales
 
         # Recompose
-        Vmix = torch.cat([V[:, :, :-self.r_selective], V2[:, :, - self.r_selective :]], dim=-1)
-        # ...
-        x_tilde = torch.matmul(traces_final, Vmix.transpose(1, 2))
+        x_tilde = torch.matmul(traces_final, V.transpose(1, 2))  # [B, T, D]
+
         # Undo shift and add anchor
         if s is not None:
             x_hat = x_tilde - s + anchor.unsqueeze(1)
         else:
             x_hat = x_tilde + anchor.unsqueeze(1)
 
+        # Residual + thin output projection and optional norm
+        y = x + self.dropout(self.out(x_hat))
+        y = self.ln(y)
+        return y
 
-        y = self.dropout(self.out(x_hat))
-        return self.ln(y)
+
+class AutoencoderBlock(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.distance  =PhaseTransport(1) 
+        self.ln = nn.LayerNorm(config.n_embd)
+        self.convolve1  = ManifoldAttentionNoAttn(
+                config, d_model=config.n_embd, rank=16, K=3,
+                shift_rank=8, shrink_lambda=0.01,
+                causal=False, ar_rho=0.0, eps=1e-5, dropout=0.0,
+                use_layernorm=True
+            )
+        self.convolve2  = ManifoldAttentionNoAttn(
+                config, d_model=config.n_embd, rank=16, K=3,
+                shift_rank=8, shrink_lambda=0.01,
+                causal=False, ar_rho=0.0, eps=1e-5, dropout=0.0,
+                use_layernorm=True
+        )
+        self.enc1 = RecurrentMLP(config.n_embd)
+        self.enc2 = RecurrentMLP(config.n_embd)
+
+        self.dec1 = RecurrentMLP(config.n_embd)
+        self.dec2 = RecurrentMLP(config.n_embd)
 
 
     
-class LocalSelfAttention(nn.Module):
-    """
-    Near-field attention with learned sinks (gpt-oss style).
-    - window_size must be odd. 5 means 2 before, self, 2 after.
-    - causal=False -> symmetric window [t-2, t+2]
-    - causal=True  -> left window only [t-2, t]
-    - learned sinks per head let heads "do nothing" by allocating mass to a null path.
-    """
-    def __init__(self, config, window_size=5, causal=True, use_sinks=True, sink_init=0.0):
-        super().__init__()
-        assert window_size % 2 == 1, "window_size must be odd"
-        assert config.n_embd % config.n_head == 0
+    def forward(self, x):
+        z = self.ln(x)
+        z = self.distance(z)
+        z1 = self.enc1(z)
+        z2 = self.enc2(z)
+        z1 = self.convolve1(z1)
 
-        self.n_head = config.n_head
-        self.n_embd = config.n_embd
-        self.head_dim = config.n_embd // config.n_head
-        self.dropout = config.dropout
-        self.causal = causal
-        self.window_size = window_size
-        self.half_w = window_size // 2
-        self.use_sinks = use_sinks
+        z2 = self.convolve2(z2)
+        z1 = self.dec1(z1)
+        z2 = self.dec2(z2)  
+        q = self.dec2(self.enc1(x)) - self.dec1(self.enc2(x)) 
+        return q + z1 + z2
 
-        # projections match original attention so you can swap in-place
-        self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=config.bias)
-        self.c_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
-
-        self.attn_dropout = nn.Dropout(config.dropout)
-        self.resid_dropout = nn.Dropout(config.dropout)
-
-        # learned per-head sinks, live in logits space
-        # shape [n_head], broadcast over batch and time
-        if self.use_sinks:
-            self.sinks = nn.Parameter(torch.full((self.n_head,), float(sink_init)))
-        else:
-            self.register_parameter("sinks", None)
-
-        # optional speedup: preallocate buffer indices after you know block_size
-        # left as runtime-computed to stay shape-agnostic here
-
-        self.dynmix = SpiralMix(config.n_embd)
-        self.ln = TanhNorm(config.n_embd)
-
-    def _build_local_index(self, T, device):
-            t_idx = torch.arange(T, device=device)                # (T,)
-            offsets = torch.arange(-self.half_w, self.half_w + 1, device=device)  # (W,)
-            neigh = t_idx[:, None] + offsets[None, :]             # (T, W)
-            valid = (neigh >= 0) & (neigh < T)
-            if self.causal:
-                valid &= (neigh <= t_idx[:, None])
-            neigh_clamped = neigh.clamp(0, T - 1)                 # safe gather
-            return neigh_clamped, valid
-
-    def forward(self, x, sinks_override: torch.Tensor | None = None):
-        B, T, C = x.size()
-
-        # q, k, v and split heads
-        q, k, v = self.c_attn(x).split(self.n_embd, dim=2)
-        s=[q,k,v]
-        s = self.dynmix(s)
-        q = s[0]
-        k = s[1]
-        #v= s[2] dont mix v
-        q = q.view(B, T, self.n_head, self.head_dim).transpose(1, 2)  # (B, H, T, Dh)
-        k = k.view(B, T, self.n_head, self.head_dim).transpose(1, 2)  # (B, H, T, Dh)
-        v = v.view(B, T, self.n_head, self.head_dim).transpose(1, 2)  # (B, H, T, Dh)
-
-        # local neighborhood indices and validity mask
-        neigh_idx, valid = self._build_local_index(T, x.device)       # (T,W), (T,W)
-        idx = neigh_idx.view(1, 1, T, self.window_size).expand(B, self.n_head, -1, -1)  # (B,H,T,W)
-
-        # gather local keys and values: (B,H,T,W,Dh)
-        k_exp = k.unsqueeze(3).expand(B, self.n_head, T, self.window_size, self.head_dim)
-        v_exp = v.unsqueeze(3).expand(B, self.n_head, T, self.window_size, self.head_dim)
-        k_neigh = torch.gather(k_exp, 2, idx.unsqueeze(-1).expand_as(k_exp))
-        v_neigh = torch.gather(v_exp, 2, idx.unsqueeze(-1).expand_as(v_exp))
-
-        # scaled logits to local window
-        inv_sqrt_d = 1.0 / math.sqrt(self.head_dim)
-        # use float32 math for stability
-        scores = (q.unsqueeze(3).to(torch.float32) * k_neigh.to(torch.float32)).sum(-1) * inv_sqrt_d  # (B,H,T,W)
-
-        # mask invalid positions inside window
-        scores = scores.masked_fill(~valid.view(1, 1, T, self.window_size), float("-inf"))
-
-        if self.use_sinks or sinks_override is not None:
-            # learned sinks per head, in logits space
-            sinks_vec = sinks_override if sinks_override is not None else self.sinks
-            # shape to broadcast over (B,H,T,W)
-            sinks_b = sinks_vec.view(1, self.n_head, 1, 1).to(scores.dtype)
-
-            # numerically stable normalization with sinks
-            # max over window per (B,H,T), then joint max with sink
-            m = scores.amax(dim=-1, keepdim=True)                              # (B,H,T,1)
-            mj = torch.maximum(m, sinks_b)                                     # (B,H,T,1)
-            exp_scores = torch.exp(scores - mj)                                # (B,H,T,W)
-            exp_sink = torch.exp(sinks_b - mj)                                 # (B,H,T,1)
-            denom = exp_scores.sum(dim=-1, keepdim=True) + exp_sink            # (B,H,T,1)
-            att = exp_scores / denom                                           # (B,H,T,W)
-        else:
-            # standard local softmax
-            att = F.softmax(scores, dim=-1)
-
-        att = self.attn_dropout(att)
-
-        # weighted sum of local values: (B,H,T,W) x (B,H,T,W,Dh) -> (B,H,T,Dh)
-        y = (att.unsqueeze(-1) * v_neigh).sum(3)
-
-        # merge heads, output projection
-        y = y.transpose(1, 2).contiguous().view(B, T, C)
-        y = self.resid_dropout(self.c_proj(y))
-        return self.ln(y)
-
-
-class BlockFast(nn.Module):
+class ScaledAutoencoderBlock(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.encode = Cell(config.n_embd,config.n_embd*2)
-        self.decode = Cell(config.n_embd,config.n_embd*2)
+        self.K = config.n_experts
+        self.distance = PhaseTransport(1)
+        self.ln = nn.LayerNorm(config.n_embd)
 
-        self.distance  =PhaseTransport(1) 
-        #add second order metadata only on first layer
-        self.ln = TanhNorm(config.n_embd)
-        self.convolve  = ManifoldAttentionNoAttn(
-                config, rank=24, K=3,
-                shift_rank=12, shrink_lambda=0.01,
-                causal=False, ar_rho=0.0, eps=1e-5)
-        
+        self.encs = nn.ModuleList([RecurrentMLP(config.n_embd) for _ in range(K)])
+        self.convs = nn.ModuleList([
+            ManifoldAttentionNoAttn(config, d_model=config.n_embd, rank=16, K=3,
+                                    shift_rank=8, shrink_lambda=0.01,
+                                    causal=False, ar_rho=0.0, eps=1e-5,
+                                    dropout=0.0, use_layernorm=True)
+            for _ in range(K)
+        ])
+        self.decs = nn.ModuleList([RecurrentMLP(config.n_embd) for _ in range(K)])
+
+        # antisymmetric mixing
+        self.B = nn.Parameter(torch.zeros(K, K))  # A = B - B^T
+        self.alpha_local = nn.Parameter(torch.tensor(1.0))
+        self.alpha_cross = nn.Parameter(torch.tensor(1.0))
+
+        self.out_ln = nn.LayerNorm(config.n_embd)
+
     def forward(self, x):
-        B,T,C= x.shape
-        x = self.ln(x)
-        q = self.distance(x)
-        a = x+ self.encode(q)
-        a = a + self.decode(self.convolve(a))
-        return a
+        z = self.distance(self.ln(x))
 
+        # precompute encodings and local paths
+        encs = [enc(z) for enc in self.encs]                      # K items
+        locals_ = [self.decs[i](self.convs[i](encs[i])) for i in range(self.K)]
+        s = torch.stack(locals_).sum(dim=0)
+
+        # antisymmetric mixing (no self terms on diagonal)
+        A = self.B - self.B.transpose(0, 1)
+        A = A - torch.diag(torch.diag(A))
+
+        # build mixed encodings and decode once per branch
+        # m_i = sum_j A[i,j] * encs[j]
+        mix = []
+        for i in range(self.K):
+            acc = 0
+            for j in range(self.K):
+                if i == j: 
+                    continue
+                acc = acc + A[i, j] * encs[j]
+            mix.append(acc)
+
+        cross = torch.stack([self.decs[i](mix[i]) for i in range(self.K)]).sum(dim=0)
+
+        # scale to keep variance in check
+        out = self.out_ln(self.alpha_local * s + self.alpha_cross * cross / math.sqrt(self.K))
+        return out
+        
 class FixedEmbedding(nn.Module):
     def __init__(self, num_embeddings, embedding_dim, seed=0):
         super().__init__()
@@ -993,15 +895,16 @@ class FixedEmbedding(nn.Module):
         return self.weight[idx]
         
 @dataclass
-class VTEConfig:
+class GPTConfig:
     block_size: int = 1024
-    vocab_size: int = 66
+    vocab_size: int = 66 # 
     n_layer: int = 12
     n_embd: int = 128
-    n_head:int = 8
+    n_experts:int = 4
     bias: bool = True
     dropout: float = 0.1
 
+    
         
 class VirtualTurboEncabulator(nn.Module):
     def __init__(self, config):
@@ -1012,9 +915,8 @@ class VirtualTurboEncabulator(nn.Module):
         self.n_embd = config.n_embd
 
         self.transformer = nn.ModuleDict(dict(
-            wte = FixedEmbedding(config.vocab_size, config.n_embd),
-            h = nn.ModuleList([BlockFast(config) for _ in range(config.n_layer)]),
-
+            wte = FixedEmbedding(config.vocab_size, config.n_embd), #avoid model attempting to cue on tokens
+            h = nn.ModuleList([ScaledAutoencoderBlock(config) for _ in range(config.n_layer)]),
 
         ))
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
@@ -1024,10 +926,13 @@ class VirtualTurboEncabulator(nn.Module):
         device = idx.device
         b, t = idx.size()
         x = self.transformer.wte(idx)
-        for i in range(self.config.n_layer):
+        x = x.detach()                 # sever any stale history just in case
+        x.requires_grad_(True)         # make x a grad leaf for τ at layer 0
+        lb_loss_total = 0.0
 
-            x = self.transformer.h[i](x)
-         
+        for i in range(self.config.n_layer):
+            x = self.transformer.h[i](x)   # aux_i is a dict with "probs"
+            # accumulate differentiable load-balance loss per layer
 
         if targets is not None:
             logits = self.lm_head(x)
@@ -1036,6 +941,7 @@ class VirtualTurboEncabulator(nn.Module):
                 targets.view(-1),
                 ignore_index=-1
             )
+
         else:
             logits = self.lm_head(x[:, [-1], :])
             loss = None
