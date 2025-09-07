@@ -915,10 +915,10 @@ class AutoencoderBlock(nn.Module):
                 use_layernorm=True
             )
         self.convolve2  = LocalSelfAttention(config)
-        self.enc1 = RecurrentMLP(config.n_embd)
-        self.enc2 = RecurrentMLP(config.n_embd)
-        self.dec1 = RecurrentMLP(config.n_embd)
-        self.dec2 = RecurrentMLP(config.n_embd)
+        self.enc1 = Cell(config.n_embd,config.n_embd*4)
+        self.enc2 = Cell(config.n_embd,config.n_embd*4)
+        self.dec1 = Cell(config.n_embd,config.n_embd*4)
+        self.dec2 = Cell(config.n_embd,config.n_embd*4)
 
 
     
