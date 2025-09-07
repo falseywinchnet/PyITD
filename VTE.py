@@ -790,6 +790,119 @@ class ManifoldAttentionNoAttn(nn.Module):
         return y
 
 
+    
+class LocalSelfAttention(nn.Module):
+    """
+    Near-field attention with learned sinks (gpt-oss style).
+    - window_size must be odd. 5 means 2 before, self, 2 after.
+    - causal=False -&gt; symmetric window [t-2, t+2]
+    - causal=True  -&gt; left window only [t-2, t]
+    - learned sinks per head let heads "do nothing" by allocating mass to a null path.
+    """
+    def __init__(self, config, window_size=5, causal=True, use_sinks=True, sink_init=0.0):
+        super().__init__()
+        assert window_size % 2 == 1, "window_size must be odd"
+        assert config.n_embd % config.n_head == 0
+
+        self.n_head = config.n_head
+        self.n_embd = config.n_embd
+        self.head_dim = config.n_embd // config.n_head
+        self.dropout = config.dropout
+        self.causal = causal
+        self.window_size = window_size
+        self.half_w = window_size // 2
+        self.use_sinks = use_sinks
+
+        # projections match original attention so you can swap in-place
+        self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=config.bias)
+        self.c_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
+
+        self.attn_dropout = nn.Dropout(config.dropout)
+        self.resid_dropout = nn.Dropout(config.dropout)
+
+        # learned per-head sinks, live in logits space
+        # shape [n_head], broadcast over batch and time
+        if self.use_sinks:
+            self.sinks = nn.Parameter(torch.full((self.n_head,), float(sink_init)))
+        else:
+            self.register_parameter("sinks", None)
+
+        # optional speedup: preallocate buffer indices after you know block_size
+        # left as runtime-computed to stay shape-agnostic here
+
+        self.dynmix = SpiralMix(config.n_embd)
+        self.ln = nn.LayerNorm(config.n_embd)
+
+    def _build_local_index(self, T, device):
+            t_idx = torch.arange(T, device=device)                # (T,)
+            offsets = torch.arange(-self.half_w, self.half_w + 1, device=device)  # (W,)
+            neigh = t_idx[:, None] + offsets[None, :]             # (T, W)
+            valid = (neigh >= 0) & (neigh < T)
+            if self.causal:
+                valid &= (neigh <= t_idx[:, None])
+            neigh_clamped = neigh.clamp(0, T - 1)                 # safe gather
+            return neigh_clamped, valid
+
+    def forward(self, x, sinks_override: torch.Tensor | None = None):
+        B, T, C = x.size()
+
+        # q, k, v and split heads
+        q, k, v = self.c_attn(x).split(self.n_embd, dim=2)
+        s=[q,k,v]
+        s = self.dynmix(s)
+        q = s[0]
+        k = s[1]
+        #v= s[2] dont mix v
+        q = q.view(B, T, self.n_head, self.head_dim).transpose(1, 2)  # (B, H, T, Dh)
+        k = k.view(B, T, self.n_head, self.head_dim).transpose(1, 2)  # (B, H, T, Dh)
+        v = v.view(B, T, self.n_head, self.head_dim).transpose(1, 2)  # (B, H, T, Dh)
+
+        # local neighborhood indices and validity mask
+        neigh_idx, valid = self._build_local_index(T, x.device)       # (T,W), (T,W)
+        idx = neigh_idx.view(1, 1, T, self.window_size).expand(B, self.n_head, -1, -1)  # (B,H,T,W)
+
+        # gather local keys and values: (B,H,T,W,Dh)
+        k_exp = k.unsqueeze(3).expand(B, self.n_head, T, self.window_size, self.head_dim)
+        v_exp = v.unsqueeze(3).expand(B, self.n_head, T, self.window_size, self.head_dim)
+        k_neigh = torch.gather(k_exp, 2, idx.unsqueeze(-1).expand_as(k_exp))
+        v_neigh = torch.gather(v_exp, 2, idx.unsqueeze(-1).expand_as(v_exp))
+
+        # scaled logits to local window
+        inv_sqrt_d = 1.0 / math.sqrt(self.head_dim)
+        # use float32 math for stability
+        scores = (q.unsqueeze(3).to(torch.float32) * k_neigh.to(torch.float32)).sum(-1) * inv_sqrt_d  # (B,H,T,W)
+
+        # mask invalid positions inside window
+        scores = scores.masked_fill(~valid.view(1, 1, T, self.window_size), float("-inf"))
+
+        if self.use_sinks or sinks_override is not None:
+            # learned sinks per head, in logits space
+            sinks_vec = sinks_override if sinks_override is not None else self.sinks
+            # shape to broadcast over (B,H,T,W)
+            sinks_b = sinks_vec.view(1, self.n_head, 1, 1).to(scores.dtype)
+
+            # numerically stable normalization with sinks
+            # max over window per (B,H,T), then joint max with sink
+            m = scores.amax(dim=-1, keepdim=True)                              # (B,H,T,1)
+            mj = torch.maximum(m, sinks_b)                                     # (B,H,T,1)
+            exp_scores = torch.exp(scores - mj)                                # (B,H,T,W)
+            exp_sink = torch.exp(sinks_b - mj)                                 # (B,H,T,1)
+            denom = exp_scores.sum(dim=-1, keepdim=True) + exp_sink            # (B,H,T,1)
+            att = exp_scores / denom                                           # (B,H,T,W)
+        else:
+            # standard local softmax
+            att = F.softmax(scores, dim=-1)
+
+        att = self.attn_dropout(att)
+
+        # weighted sum of local values: (B,H,T,W) x (B,H,T,W,Dh) -&gt; (B,H,T,Dh)
+        y = (att.unsqueeze(-1) * v_neigh).sum(3)
+
+        # merge heads, output projection
+        y = y.transpose(1, 2).contiguous().view(B, T, C)
+        y = self.resid_dropout(self.c_proj(y))
+        return self.ln(y)
+
 class AutoencoderBlock(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -801,15 +914,9 @@ class AutoencoderBlock(nn.Module):
                 causal=False, ar_rho=0.0, eps=1e-5, dropout=0.0,
                 use_layernorm=True
             )
-        self.convolve2  = ManifoldAttentionNoAttn(
-                config, d_model=config.n_embd, rank=16, K=3,
-                shift_rank=8, shrink_lambda=0.01,
-                causal=False, ar_rho=0.0, eps=1e-5, dropout=0.0,
-                use_layernorm=True
-        )
+        self.convolve2  = LocalSelfAttention(config)
         self.enc1 = RecurrentMLP(config.n_embd)
         self.enc2 = RecurrentMLP(config.n_embd)
-
         self.dec1 = RecurrentMLP(config.n_embd)
         self.dec2 = RecurrentMLP(config.n_embd)
 
@@ -828,87 +935,7 @@ class AutoencoderBlock(nn.Module):
         q = self.dec2(self.enc1(x)) - self.dec1(self.enc2(x)) 
         return q + z1 + z2
 
-import math
-import torch
-import torch.nn as nn
 
-class ScaledAutoencoderBlock(nn.Module):
-    """
-    Canon form:
-      output =  sum_i [ dec_i( conv_i( enc_i( distance(ln(x)) ) ) ) ]
-              + sum_{i<j} [ dec_j( enc_i(x) ) - dec_i( enc_j(x) ) ] / sqrt(num_pairs)
-
-    - Local paths operate on z = distance(ln(x)).
-    - Cross paths operate on raw x, exactly matching your 2-branch inversion.
-    - Antisymmetric cross term ensures a centered interaction basis.
-    - O(K^2) in decodes for the cross term by design, since that is the canon.
-    """
-
-    def __init__(self, config,
-                 convolve_ctor=None,
-                 convolve_kwargs=None,
-                 cross_scale=True):
-        super().__init__()
-
-        self.K = config.n_experts
-
-        assert  self.K >= 2
-        self.cross_scale = cross_scale
-
-        # input preproc
-        self.ln = nn.LayerNorm(config.n_embd)
-        self.distance = PhaseTransport(1)
-
-        # branch modules
-        self.encs = nn.ModuleList([RecurrentMLP(config.n_embd) for _ in range(self.K)])
-        if convolve_ctor is None:
-            convolve_ctor = ManifoldAttentionNoAttn
-        if convolve_kwargs is None:
-            convolve_kwargs = dict(
-                d_model=config.n_embd, rank=16, K=3,
-                shift_rank=8, shrink_lambda=0.01,
-                causal=False, ar_rho=0.0, eps=1e-5,
-                dropout=config.dropout, use_layernorm=True
-            )
-        self.convs = nn.ModuleList([convolve_ctor(config, **convolve_kwargs) for _ in range(self.K)])
-        self.decs = nn.ModuleList([RecurrentMLP(config.n_embd) for _ in range(self.K)])
-
-        # optional learned scalers for stability
-        self.alpha_local = nn.Parameter(torch.tensor(1.0))
-        self.alpha_cross = nn.Parameter(torch.tensor(1.0))
-
-        # final LN to keep things well behaved
-        self.out_ln = nn.LayerNorm(config.n_embd)
-
-    def forward(self, x):
-        # centered stream for local paths
-        z = self.distance(self.ln(x))
-
-        # encodings on z for locals, on x for cross
-        Ez = [enc(z) for enc in self.encs]   # list length K
-        Ex = [enc(x) for enc in self.encs]   # list length K
-
-        # symmetric local sum: sum_i dec_i(conv_i(enc_i(z)))
-        local_terms = []
-        for i in range(self.K):
-            u = self.convs[i](Ez[i])
-            local_terms.append(self.decs[i](u))
-        local_sum = torch.stack(local_terms, dim=0).sum(dim=0)
-
-        # antisymmetric cross sum: sum_{i<j} [ dec_j(enc_i(x)) - dec_i(enc_j(x)) ]
-        cross_sum = 0
-        num_pairs = self.K * (self.K - 1) // 2
-        for i in range(self.K):
-            ei = Ex[i]
-            for j in range(i + 1, self.K):
-                ej = Ex[j]
-                cross_sum = cross_sum + (self.decs[j](ei) - self.decs[i](ej))
-
-        if self.cross_scale and num_pairs > 0:
-            cross_sum = cross_sum / math.sqrt(num_pairs)
-
-        y = self.alpha_local * local_sum + self.alpha_cross * cross_sum
-        return self.out_ln(y)
         
 class FixedEmbedding(nn.Module):
     def __init__(self, num_embeddings, embedding_dim, seed=0):
@@ -926,16 +953,18 @@ class FixedEmbedding(nn.Module):
 @dataclass
 class GPTConfig:
     block_size: int = 1024
-    vocab_size: int = 66 # 
+    vocab_size: int = 66 
     n_layer: int = 12
     n_embd: int = 128
     n_experts:int = 4
+    n_head:int=4
     bias: bool = True
     dropout: float = 0.1
 
+
     
         
-class VirtualTurboEncabulator(nn.Module):
+class GPT(nn.Module):
     def __init__(self, config):
         super().__init__()
         assert config.vocab_size is not None
@@ -944,8 +973,8 @@ class VirtualTurboEncabulator(nn.Module):
         self.n_embd = config.n_embd
 
         self.transformer = nn.ModuleDict(dict(
-            wte = FixedEmbedding(config.vocab_size, config.n_embd), #avoid model attempting to cue on tokens
-            h = nn.ModuleList([ScaledAutoencoderBlock(config) for _ in range(config.n_layer)]),
+            wte = FixedEmbedding(config.vocab_size, config.n_embd),
+            h = nn.ModuleList([AutoencoderBlock(config) for _ in range(config.n_layer)]),
 
         ))
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
@@ -955,13 +984,11 @@ class VirtualTurboEncabulator(nn.Module):
         device = idx.device
         b, t = idx.size()
         x = self.transformer.wte(idx)
-        x = x.detach()                 # sever any stale history just in case
-        x.requires_grad_(True)         # make x a grad leaf for τ at layer 0
-        lb_loss_total = 0.0
+        x = x.detach()                 
+        x.requires_grad_(True)         
 
         for i in range(self.config.n_layer):
-            x = self.transformer.h[i](x)   # aux_i is a dict with "probs"
-            # accumulate differentiable load-balance loss per layer
+            x = self.transformer.h[i](x)  
 
         if targets is not None:
             logits = self.lm_head(x)
