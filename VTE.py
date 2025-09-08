@@ -1,6 +1,8 @@
 #copyright joshuah.rainstar@gmail.com 2025
 #GPT framework from karapathy et al
 #various ideas and concepts annotated as i get to them
+#sep 9 2025: two-stage component isolation and mixing pipeline
+#intended to automate semantic selection and amplification at all stages
 from __future__ import annotations
 import math
 import typing
@@ -11,267 +13,7 @@ from dataclasses import dataclass
 from typing import Dict, Tuple,Optional, List
 
 
-class Cell(nn.Module):
-    def __init__(self, dim_in: int, hidden: int):
-        super().__init__()
-        self.fc1 = nn.Linear(dim_in, hidden, bias=False) #dont change, false intentional
-        torch.nn.init.kaiming_uniform_(self.fc1.weight, nonlinearity='relu')
-        self.fc2 = nn.Linear(hidden, dim_in, bias=True)
-        torch.nn.init.kaiming_uniform_(self.fc2.weight, nonlinearity='relu')
-        self.act = nn.GELU()
-    def forward(self, x):
-        return self.fc2(self.act(self.fc1(x)))   
-
-class RecurrentMLP(nn.Module):
-    def __init__(self, dim_in: int):
-        super().__init__()
-        self.k = 2 #can set to 3, but marginal gains
-        self.hidden = dim_in*2 #if overfitting reduce to dim_in or even dim_in//2
-        self.cells_a = nn.ModuleList([Cell(dim_in, self.hidden) for _ in range(self.k)])
-    def forward(self, x):
-        z = x
-        for i in range(self.k):
-            z = z + self.cells_a[i](z)
-        return z
         
-class RecurrentMLP_shrink(nn.Module):
-    def __init__(self, dim_in: int):
-        super().__init__()
-        self.k = 2 #can set to 3, but marginal gains
-        self.hidden = dim_in//2 #if overfitting reduce to dim_in or even dim_in//2
-        self.cells_a = nn.ModuleList([Cell(dim_in, self.hidden) for _ in range(self.k)])
-    def forward(self, x):
-        z = x
-        for i in range(self.k):
-            z = z + self.cells_a[i](z)
-        return z
-
-
-# Sparse-gradient router; gradients only to chosen k logits
-class RouterTopK(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, z, k, tau):
-        topv, topi = torch.topk(z, k, dim=1, largest=True, sorted=False)
-        w = torch.softmax(topv / (tau + 1e-8), dim=1)
-        ctx.save_for_backward(topi, w)
-        ctx.z_shape = z.shape
-        ctx.tau = float(tau)
-        return topi, w
-
-    @staticmethod
-    def backward(ctx, grad_topi, grad_w):
-        topi, w = ctx.saved_tensors
-        tau = ctx.tau
-        grad_z = None
-        if grad_w is not None:
-            s = (grad_w * w).sum(dim=1, keepdim=True)
-            grad_topv = (w * (grad_w - s)) / (tau + 1e-8)
-            grad_z = torch.zeros(ctx.z_shape, device=w.device, dtype=w.dtype)
-            grad_z.scatter_add_(1, topi, grad_topv)
-        return grad_z, None, None
-
-def router_topk(z, k, tau):
-    if k == 1:
-        topi = z.argmax(dim=1, keepdim=True)                     # [N,1]
-        w = torch.ones(z.size(0), 1, device=z.device, dtype=z.dtype)
-        return topi, w
-    return RouterTopK.apply(z, k, tau)
-
-def _apply_mixture_grouped(x_flat, topi, weights, W):
-    N, in_dim = x_flat.shape
-    L, out_dim, in_dim_w = W.shape
-    assert in_dim == in_dim_w
-
-    if topi.size(1) == 1:  # fast path
-        token_idx = torch.arange(N, device=topi.device)
-        expert_idx = topi.squeeze(1)
-        w_flat = weights.squeeze(1)  # all ones from router_topk fast path
-    else:
-        k = topi.shape[1]
-        token_idx = torch.arange(N, device=topi.device).repeat_interleave(k)
-        expert_idx = topi.reshape(-1)
-        w_flat = weights.reshape(-1)
-
-    expert_sorted, order = torch.sort(expert_idx)
-    token_sorted = token_idx.index_select(0, order)
-    w_sorted = w_flat.index_select(0, order)
-
-    changed = torch.ones_like(expert_sorted, dtype=torch.bool)
-    changed[1:] = expert_sorted[1:] != expert_sorted[:-1]
-    seg_starts = torch.nonzero(changed, as_tuple=False).flatten()
-    seg_ends = torch.empty_like(seg_starts); seg_ends[:-1] = seg_starts[1:]; seg_ends[-1] = expert_sorted.numel()
-    used_experts = expert_sorted.index_select(0, seg_starts)
-
-    y = x_flat.new_zeros(N, out_dim)
-    for exp, s, e in zip(used_experts.tolist(), seg_starts.tolist(), seg_ends.tolist()):
-        idx = token_sorted[s:e]
-        X = x_flat.index_select(0, idx)
-        y_e = F.linear(X, W[exp])                 # [m, out]
-        if topi.size(1) != 1:                     # skip multiply when weights==1
-            y_e.mul_(w_sorted[s:e].unsqueeze(1))
-        y.index_add_(0, idx, y_e)
-    return y
-
-def _apply_bias_grouped(topi, weights, B):
-    N, k = topi.shape
-    out_dim = B.shape[1]
-    if k == 1:
-        token_idx = torch.arange(N, device=topi.device)
-        expert_idx = topi.squeeze(1)
-        w_flat = weights.squeeze(1)               # ones
-    else:
-        token_idx = torch.arange(N, device=topi.device).repeat_interleave(k)
-        expert_idx = topi.reshape(-1)
-        w_flat = weights.reshape(-1)
-    expert_sorted, order = torch.sort(expert_idx)
-    token_sorted = token_idx.index_select(0, order)
-    w_sorted = w_flat.index_select(0, order)
-    changed = torch.ones_like(expert_sorted, dtype=torch.bool)
-    changed[1:] = expert_sorted[1:] != expert_sorted[:-1]
-    seg_starts = torch.nonzero(changed, as_tuple=False).flatten()
-    seg_ends = torch.empty_like(seg_starts); seg_ends[:-1] = seg_starts[1:]; seg_ends[-1] = expert_sorted.numel()
-    used_experts = expert_sorted.index_select(0, seg_starts)
-
-    y = B.new_zeros((N, out_dim))
-    for exp, s, e in zip(used_experts.tolist(), seg_starts.tolist(), seg_ends.tolist()):
-        idx = token_sorted[s:e]
-        if k == 1:
-            m = idx.size(0)
-            y.index_add_(0, idx, B[exp].unsqueeze(0).expand(m, -1))
-        else:
-            ws = w_sorted[s:e].unsqueeze(1)
-            y.index_add_(0, idx, ws * B[exp].unsqueeze(0))
-    return y
-
-class FastLearnedCellX3(nn.Module):
-    def __init__(self, D_in, H, D_out,
-                 L_w1=12, L_w2=12, L_b2=12,
-                 k1=3, k2=3, k3=3, tau1=1.0, tau2=1.0, tau3=1.0,
-                 d_addr=32,
-                 learn_addr=False,
-                 learn_tape_w1=True, learn_tape_w2=True, learn_tape_b2=True):
-        super().__init__()
-        self.D_in, self.H, self.D_out = int(D_in), int(H), int(D_out)
-        self.L_w1, self.L_w2, self.L_b2 = int(L_w1), int(L_w2), int(L_b2)
-        self.k1, self.k2, self.k3 = int(k1), int(k2), int(k3)
-        self.t1, self.t2, self.t3 = float(tau1), float(tau2), float(tau3)
-
-        self.P = nn.Linear(self.D_in, int(d_addr), bias=False)
-        if not learn_addr:
-            for p in self.P.parameters():
-                p.requires_grad = False
-            with torch.no_grad():
-                nn.init.normal_(self.P.weight, std=1.0 / math.sqrt(self.D_in))
-
-        def init_U(L, d, learn):
-            U = torch.randn(L, d)
-            U = U - U.mean(dim=1, keepdim=True)
-            U = U / (U.norm(dim=1, keepdim=True) + 1e-8)
-            return nn.Parameter(U, requires_grad=learn)
-
-        d_addr = int(d_addr)
-        self.U1 = init_U(self.L_w1, d_addr, learn_addr)
-        self.U2 = init_U(self.L_w2, d_addr, learn_addr)
-        self.U3 = init_U(self.L_b2, d_addr, learn_addr)
-
-        # Make params contiguous; channels-last-ish helps matmul kernels
-        self.W1 = nn.Parameter(
-            F.normalize(torch.randn(self.L_w1, self.H, self.D_in), dim=(1, 2)).contiguous(),
-            requires_grad=learn_tape_w1
-        )
-        self.W2 = nn.Parameter(
-            F.normalize(torch.randn(self.L_w2, self.D_out, self.H), dim=(1, 2)).contiguous(),
-            requires_grad=learn_tape_w2
-        )
-        self.b2 = nn.Parameter(
-            F.normalize(torch.randn(self.L_b2, self.D_out), dim=1).contiguous(),
-            requires_grad=learn_tape_b2
-        )
-
-        self.act = nn.GELU()
-
-    def _address(self, x_addr: torch.Tensor):
-        U_pack = torch.cat([self.U1, self.U2, self.U3], dim=0)          # [Ltot, d]
-        Z = x_addr @ U_pack.t()                                         # [N, Ltot]
-        s1, s2, s3 = self.L_w1, self.L_w2, self.L_b2
-        z1, z2, z3 = torch.split(Z, (s1, s2, s3), dim=1)
-
-        i1, w1 = router_topk(z1, self.k1, self.t1)
-        i2, w2 = router_topk(z2, self.k2, self.t2)
-        i3, w3 = router_topk(z3, self.k3, self.t3)
-        return (i1, w1), (i2, w2), (i3, w3)
-
-    def forward(self, x):
-        if x.ndim == 3:
-            B, T, D = x.shape
-            x_flat = x.reshape(B * T, D)
-        else:
-            B, T = x.shape[0], 1
-            x_flat = x
-
-        x_addr = self.P(x_flat)                                        # [N, d_addr]
-        (i1, w1), (i2, w2), (i3, w3) = self._address(x_addr)
-
-        h = _apply_mixture_grouped(x_flat, i1, w1, self.W1)  # [N, H]
-        h = self.act(h)
-
-        
-        y = _apply_mixture_grouped(h, i2, w2, self.W2)       # [N, D_out]
-        y = y + _apply_bias_grouped(i3, w3, self.b2)
-      
-
-        return y.view(B, T, self.D_out) if x.ndim == 3 else y
-
-
-        
-class PairwiseRotSpiral(nn.Module):
-    def __init__(self, dim, radius=6.0, omega=1.0, k=1.0, step=0.1, cube_shell=False):
-        super().__init__()
-        self.dim = dim
-        self.radius = float(radius)
-        self.omega = float(omega)
-        self.k = float(k)
-        self.step = float(step)
-        self.cube_shell = bool(cube_shell)
-        self.eps = 1e-8
-
-    def _cos_sin(self, x):
-        theta = self.omega * self.step
-        # Use Python math for scalar, then create tensors on correct device and dtype
-        c = torch.tensor(math.cos(theta), device=x.device, dtype=x.dtype)
-        s = torch.tensor(math.sin(theta), device=x.device, dtype=x.dtype)
-        return c, s
-
-    def forward(self, x):
-        D = x.size(-1)
-        # radial term
-        r = torch.linalg.vector_norm(x, dim=-1, keepdim=True).clamp_min(self.eps)
-        radial = (self.radius - r) * (x / r)
-
-        # rotation on 2D pairs, vectorized
-        if D >= 2:
-            c, s = self._cos_sin(x)
-            n2 = D // 2
-            head = x[..., : n2 * 2].reshape(*x.shape[:-1], n2, 2)
-            xi = head[..., 0]
-            xj = head[..., 1]
-            yi = c * xi - s * xj
-            yj = s * xi + c * xj
-            rot = torch.stack([yi, yj], dim=-1).reshape(*x.shape[:-1], n2 * 2)
-            if D % 2 == 1:
-                y = torch.cat([rot, x[..., -1:].contiguous()], dim=-1)
-            else:
-                y = rot
-        else:
-            y = x
-
-        # one-step Euler update
-        y = x + self.step * ((y - x) + self.k * radial)
-
-        if self.cube_shell:
-            y = self.radius * torch.tanh(y / self.radius)
-        return y
-
 
 
 # Example mixer that spirals EACH component around a chosen center (origin by default)
@@ -687,7 +429,7 @@ def subspace_iteration_linop(matvec, d, rank, K, V0, eps: float = 1e-6):
     return V
 
 
-class ManifoldAttentionNoAttn(nn.Module):
+class ManifoldAttentionNoAttnStage2(nn.Module):
     def __init__(
         self,
         config,
@@ -707,7 +449,7 @@ class ManifoldAttentionNoAttn(nn.Module):
         self.d_model = d_model
         self.rank = rank                # <-- fix: respect constructor
         self.K = K
-        self.shift_rank = shift_rank
+        self.shift_rank = self.d_model 
         self.shrink_lambda = float(shrink_lambda)
         self.causal = bool(causal)
         self.ar_rho = float(ar_rho)
@@ -715,6 +457,7 @@ class ManifoldAttentionNoAttn(nn.Module):
 
         self.shift = LowRankShift(d_model, shift_rank) if shift_rank > 0 else None
         self.out = nn.Linear(d_model, d_model, bias=False)
+        self.up = nn.Linear(d_model, d_model, bias=False)
         self.dropout = nn.Dropout(dropout)
         self.ln = nn.LayerNorm(d_model) if use_layernorm else nn.Identity()
         self.dynmix = SpiralMix(1)
@@ -766,10 +509,10 @@ class ManifoldAttentionNoAttn(nn.Module):
         traces_n, scales = energy_normalize(traces, eps=self.eps)
         traces_n = soft_shrink(traces_n, self.shrink_lambda)
 
-        traces_list = [traces_n[..., i] for i in range(traces_n.size(-1))]
-        prod = self.dynmix(traces_list)
-        traces_n = torch.stack(prod, dim=-1)
+        # Overlapped triad mixing (stride=2, overlap-by-one), done simultaneously.
+        traces_n = self.dynmix(traces_n)                                     # 3 x [B, T, num_triads]
 
+        
         if self.causal and self.ar_rho > 0.0:
             traces_n = ar1_filter(traces_n, self.ar_rho)
 
@@ -790,150 +533,264 @@ class ManifoldAttentionNoAttn(nn.Module):
         return y
 
 
+
+def frft_time(z: torch.Tensor, alpha: float, *, t_min: float = -1.0, t_max: float = 1.0, eps: float = 1e-7) -> torch.Tensor:
+    """
+    Fractional Fourier transform (FrFT) along the time axis (dim=1), batched & differentiable.
+
+    Args:
+        z:     Tensor [..., T, ...]; we assume time is at dim=1 (i.e., [B, T, C] is common).
+               Real or complex. Returned dtype is complex64/complex128 accordingly.
+        alpha: FrFT order in radians (α ∈ ℝ). α=0 -> identity; α=π/2 -> (unitary) FFT up to a global phase.
+        t_min, t_max: define a continuous, centered time grid over which the quadratic phases are drawn.
+        eps:   numerical floor to avoid division-by-zero near singular α.
+
+    Returns:
+        Same shape as z, complex dtype, FrFT applied along dim=1.
+    """
+    # Move time to axis 1 for convenience (no copy if already there)
+    orig_shape = z.shape
+    if z.dim() < 2:
+        raise ValueError("Input must have a time dimension at dim=1 (e.g., [B, T, ...]).")
+    if z.dtype.is_complex:
+        zc = z
+    else:
+        # Promote to complex for phase ops
+        zc = z.to(torch.complex64 if z.dtype == torch.float32 else torch.complex128)
+
+    device = zc.device
+    dtype  = zc.dtype
+    B_like = zc.shape[0]
+    T      = zc.shape[1]
+    tail   = zc.shape[2:]
+
+    # Wrap α into (-π, π] to stabilize trigs
+    a = ((float(alpha) + math.pi) % (2.0 * math.pi)) - math.pi
+
+    # Handle near-identity and near-π cases explicitly (fast, stable)
+    if abs(a) < 1e-6:
+        return zc
+    if abs(abs(a) - math.pi) < 1e-6:
+        # α ≈ π -> time reversal with a global phase
+        phase = torch.exp(1j * torch.tensor(math.copysign(math.pi/2, a), device=device, dtype=dtype))
+        return phase * torch.flip(zc, dims=[1])
+
+    # Core parameters
+    s = 1.0 / max(eps, abs(math.sin(a)))             # |csc α|
+    s *= torch.sign(torch.tensor(math.sin(a), device=device, dtype=torch.float32)).item()  # keep sign
+    c = math.cos(a) / max(eps, math.sin(a))          # cot α
+
+    # Build centered, continuous time grid t in [t_min, t_max]
+    t = torch.linspace(t_min, t_max, T, device=device, dtype=torch.float32)
+    t = t.to(zc.real.dtype)  # match precision
+    dt = (t_max - t_min) / (T - 1) if T > 1 else torch.tensor(1.0, device=device, dtype=t.dtype)
+
+    # Pre- / post- chirps (broadcast over batch + channels)
+    # From the chirp-convolution identity:
+    #   U[n] = pref * e^{ iπ (cot α + csc α) t_n^2 } * ( g * h )[n],
+    #   where g[k] = x[k] e^{ iπ (cot α + csc α) t_k^2 },  h[m] = e^{ -iπ csc α (m*dt)^2 }.
+    gamma_plus = (c + s) * (t**2)            # [T]
+    pre_post   = torch.exp(1j * math.pi * gamma_plus).reshape(1, T, *([1] * len(tail)))  # [1,T,1,...]
+
+    g = zc * pre_post                        # [B, T, C...]
+
+    # Build the difference-kernel h over index offsets m = -(T-1)..(T-1)
+    m = torch.arange(-(T-1), T, device=device, dtype=t.dtype)   # length 2T-1
+    h = torch.exp(-1j * math.pi * s * (m * dt)**2)              # [2T-1]
+
+    # FFT-based linear convolution along T
+    L = 1 << (2 * T - 1 - 1).bit_length()    # next power-of-two >= (2T-1)
+    # Pad g along time, keeping other dims
+    pad_g = torch.nn.functional.pad(g, pad=(0,)* (2*len(tail)) + (0, L - T))  # pad last-in-first-out: (..., T) -> (..., L)
+    # Embed h into length-L with center at index 0 for circular -> linear extraction
+    h_pad = torch.zeros(L, device=device, dtype=dtype)
+    # Place h at indices corresponding to m (negative indices wrap)
+    idx = (m % L).long()
+    h_pad.scatter_(0, idx, h.to(dtype))
+
+    # FFT multiply (along time axis)
+    G = torch.fft.fft(pad_g, n=L, dim=1)
+    H = torch.fft.fft(h_pad).reshape(1, L, *([1] * len(tail)))
+    conv_full = torch.fft.ifft(G * H, n=L, dim=1)
+
+    # Extract the central T samples for *linear* conv: start at offset (T-1)
+    start = T - 1
+    conv_center = conv_full[:, start:start+T, ...]
+
+    # Post-chirp and prefactor
+    pref = torch.sqrt(torch.tensor(1.0, dtype=dtype, device=device) - 1j * torch.tensor(c, dtype=dtype, device=device))
+    out = pref * pre_post * conv_center
+
+    # (Optional) scale by dt for integral-like normalization; comment out if you prefer unscaled energy
+    out = out * dt
+
+    return out
     
-class LocalSelfAttention(nn.Module):
-    """
-    Near-field attention with learned sinks (gpt-oss style).
-    - window_size must be odd. 5 means 2 before, self, 2 after.
-    - causal=False -&gt; symmetric window [t-2, t+2]
-    - causal=True  -&gt; left window only [t-2, t]
-    - learned sinks per head let heads "do nothing" by allocating mass to a null path.
-    """
-    def __init__(self, config, window_size=5, causal=True, use_sinks=True, sink_init=0.0):
+class ManifoldAttentionNoAttnStage1(nn.Module):
+    def __init__(
+        self,
+        config,
+        d_model: int,
+        rank: int,
+        K: int = 2,
+        shift_rank: int = 0,
+        shrink_lambda: float = 0.0,
+        causal: bool = False,
+        ar_rho: float = 0.0,
+        eps: float = 1e-5,
+        dropout: float = 0.0,
+        use_layernorm: bool = True,
+    ) -> None:
         super().__init__()
-        assert window_size % 2 == 1, "window_size must be odd"
-        assert config.n_embd % config.n_head == 0
+        assert rank > 0 and K >= 1
+        self.d_model = d_model
+        self.rank = rank                # <-- fix: respect constructor
+        self.K = K
+        self.shift_rank = self.d_model 
+        self.shrink_lambda = float(shrink_lambda)
+        self.causal = bool(causal)
+        self.ar_rho = float(ar_rho)
+        self.eps = float(eps)
 
-        self.n_head = config.n_head
-        self.n_embd = config.n_embd
-        self.head_dim = config.n_embd // config.n_head
-        self.dropout = config.dropout
-        self.causal = causal
-        self.window_size = window_size
-        self.half_w = window_size // 2
-        self.use_sinks = use_sinks
+        self.shift = LowRankShift(d_model, shift_rank) if shift_rank > 0 else None
+        self.out = nn.Linear(d_model, d_model, bias=False)
+        self.up = nn.Linear(d_model, d_model, bias=False)
+        self.dropout = nn.Dropout(dropout)
+        self.ln = nn.LayerNorm(d_model) if use_layernorm else nn.Identity()
+        self.dynmix = SpiralMix(1)
 
-        # projections match original attention so you can swap in-place
-        self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=config.bias)
-        self.c_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """x: [B, T, D] -> y: [B, T, D]"""
+        B, T, D = x.shape
+        assert D == self.d_model
 
-        self.attn_dropout = nn.Dropout(config.dropout)
-        self.resid_dropout = nn.Dropout(config.dropout)
+        # Anchor vector (no large allocs)
+        anchor = torch.zeros(B, D, device=x.device, dtype=x.dtype)
+        anchor[:, 0] = 1.0
 
-        # learned per-head sinks, live in logits space
-        # shape [n_head], broadcast over batch and time
-        if self.use_sinks:
-            self.sinks = nn.Parameter(torch.full((self.n_head,), float(sink_init)))
+        # Center
+        xc = x - anchor.unsqueeze(1)  # broadcast over T
+
+        # Optional low-rank de-normalization shift; avoid adding zeros if not needed
+        if self.shift is not None:
+            s = self.shift(x)
+            xprime = xc + s
         else:
-            self.register_parameter("sinks", None)
+            s = None
+            xprime = xc
 
-        # optional speedup: preallocate buffer indices after you know block_size
-        # left as runtime-computed to stay shape-agnostic here
+        # Shapes
+        xt = xprime.transpose(1, 2)  # [B, D, T]
 
-        self.dynmix = SpiralMix(config.n_embd)
-        self.ln = nn.LayerNorm(config.n_embd)
+        # Optimized: linear operator form with the SAME init as covariance path
+        # Build V0 as first r columns of the identity, expanded over batch
+        E = torch.zeros(B, D, self.rank, device=x.device, dtype=x.dtype)
+        E[:, :self.rank, :self.rank] = torch.eye(self.rank, device=x.device, dtype=x.dtype)
 
-    def _build_local_index(self, T, device):
-            t_idx = torch.arange(T, device=device)                # (T,)
-            offsets = torch.arange(-self.half_w, self.half_w + 1, device=device)  # (W,)
-            neigh = t_idx[:, None] + offsets[None, :]             # (T, W)
-            valid = (neigh >= 0) & (neigh < T)
-            if self.causal:
-                valid &= (neigh <= t_idx[:, None])
-            neigh_clamped = neigh.clamp(0, T - 1)                 # safe gather
-            return neigh_clamped, valid
+        # Precompute per-batch Omega weights from X'  (no top-k, no learning)
+        alphas = torch.linspace(0.15, 2.99, steps=self.rank, device=x.device)  # fixed small grid
+        p = 0.5
+        eps = 1e-6
+        
+        
+        def Komega_apply(Y, weights):  # Y: [B, T, r]
+            out = 0
+            for (alpha, w) in weights:                  # w: [B, T]
+                Y_a = frft_time(Y, alpha)               # [B, T, r]
+                out = out + frft_time(w.unsqueeze(-1) * Y_a, -alpha)
+            return (out / len(weights)).real
+        
+        # Build weights once per forward (data-derived, no params)
+        weights = []
+        for alpha in alphas:
+            X_a = frft_time(xprime, alpha)              # [B, T, D]
+            E_a = X_a.abs().pow(2).mean(dim=2)          # [B, T]  (avg over features)
+            w_a = (E_a + eps).pow(p)
+            w_a = w_a / (w_a.mean(dim=1, keepdim=True) + eps)
+            weights.append((alpha, w_a))
+        
+        # matvec used inside subspace_iteration_linop:
+        def cov_matvec(V):                               # V: [B, D, r]
+            Y = torch.matmul(xprime, V)                  # [B, T, r]
+            Y = Komega_apply(Y, weights)                 # Omega operator on traces
+            Z = torch.matmul(xt, Y) / float(T)           # [B, D, r]
+            return Z + self.eps * V
+        V = subspace_iteration_linop(
+            cov_matvec, D, self.rank, self.K, V0=E, eps=self.eps
+        )
 
-    def forward(self, x, sinks_override: torch.Tensor | None = None):
-        B, T, C = x.size()
+        # Sign alignment using anchor token
+        V = sign_align(V, anchor)  # [B, D, r]
+        # Project to r scalar traces over time: [B, T, r]
+        traces = torch.matmul(xprime, V)  # [B, T, r]
 
-        # q, k, v and split heads
-        q, k, v = self.c_attn(x).split(self.n_embd, dim=2)
-        s=[q,k,v]
-        s = self.dynmix(s)
-        q = s[0]
-        k = s[1]
-        #v= s[2] dont mix v
-        q = q.view(B, T, self.n_head, self.head_dim).transpose(1, 2)  # (B, H, T, Dh)
-        k = k.view(B, T, self.n_head, self.head_dim).transpose(1, 2)  # (B, H, T, Dh)
-        v = v.view(B, T, self.n_head, self.head_dim).transpose(1, 2)  # (B, H, T, Dh)
+        # Analytic conditioning
+        traces_n, scales = energy_normalize(traces, eps=self.eps)
+        traces_n = soft_shrink(traces_n, self.shrink_lambda)
 
-        # local neighborhood indices and validity mask
-        neigh_idx, valid = self._build_local_index(T, x.device)       # (T,W), (T,W)
-        idx = neigh_idx.view(1, 1, T, self.window_size).expand(B, self.n_head, -1, -1)  # (B,H,T,W)
+        traces_n = self.dynmix(traces_n)                            
 
-        # gather local keys and values: (B,H,T,W,Dh)
-        k_exp = k.unsqueeze(3).expand(B, self.n_head, T, self.window_size, self.head_dim)
-        v_exp = v.unsqueeze(3).expand(B, self.n_head, T, self.window_size, self.head_dim)
-        k_neigh = torch.gather(k_exp, 2, idx.unsqueeze(-1).expand_as(k_exp))
-        v_neigh = torch.gather(v_exp, 2, idx.unsqueeze(-1).expand_as(v_exp))
+        
+        if self.causal and self.ar_rho > 0.0:
+            traces_n = ar1_filter(traces_n, self.ar_rho)
 
-        # scaled logits to local window
-        inv_sqrt_d = 1.0 / math.sqrt(self.head_dim)
-        # use float32 math for stability
-        scores = (q.unsqueeze(3).to(torch.float32) * k_neigh.to(torch.float32)).sum(-1) * inv_sqrt_d  # (B,H,T,W)
+        traces_final = traces_n * scales
 
-        # mask invalid positions inside window
-        scores = scores.masked_fill(~valid.view(1, 1, T, self.window_size), float("-inf"))
+        # Recompose
+        x_tilde = torch.matmul(traces_final, V.transpose(1, 2))  # [B, T, D]
 
-        if self.use_sinks or sinks_override is not None:
-            # learned sinks per head, in logits space
-            sinks_vec = sinks_override if sinks_override is not None else self.sinks
-            # shape to broadcast over (B,H,T,W)
-            sinks_b = sinks_vec.view(1, self.n_head, 1, 1).to(scores.dtype)
-
-            # numerically stable normalization with sinks
-            # max over window per (B,H,T), then joint max with sink
-            m = scores.amax(dim=-1, keepdim=True)                              # (B,H,T,1)
-            mj = torch.maximum(m, sinks_b)                                     # (B,H,T,1)
-            exp_scores = torch.exp(scores - mj)                                # (B,H,T,W)
-            exp_sink = torch.exp(sinks_b - mj)                                 # (B,H,T,1)
-            denom = exp_scores.sum(dim=-1, keepdim=True) + exp_sink            # (B,H,T,1)
-            att = exp_scores / denom                                           # (B,H,T,W)
+        # Undo shift and add anchor
+        if s is not None:
+            x_hat = x_tilde - s + anchor.unsqueeze(1)
         else:
-            # standard local softmax
-            att = F.softmax(scores, dim=-1)
+            x_hat = x_tilde + anchor.unsqueeze(1)
 
-        att = self.attn_dropout(att)
+        # Residual + thin output projection and optional norm
+        y = x + self.dropout(self.out(x_hat))
+        y = self.ln(y)
+        return y
 
-        # weighted sum of local values: (B,H,T,W) x (B,H,T,W,Dh) -&gt; (B,H,T,Dh)
-        y = (att.unsqueeze(-1) * v_neigh).sum(3)
+class Cell(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.fc1 = nn.Linear(config.n_embd, config.n_embd*2, bias=False) #dont change, false intentional
+        torch.nn.init.kaiming_uniform_(self.fc1.weight, nonlinearity='relu')
+        self.fc2 = nn.Linear(config.n_embd*2, config.n_embd, bias=True)
+        torch.nn.init.kaiming_uniform_(self.fc2.weight, nonlinearity='relu')
+        self.act = nn.GELU()
+        self.dropout = nn.Dropout(config.dropout)
 
-        # merge heads, output projection
-        y = y.transpose(1, 2).contiguous().view(B, T, C)
-        y = self.resid_dropout(self.c_proj(y))
-        return self.ln(y)
-
+    def forward(self, x):
+        return self.dropout(self.fc2(self.act(self.fc1(x))))
+        
 class AutoencoderBlock(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.distance  =PhaseTransport(1) 
         self.ln = nn.LayerNorm(config.n_embd)
-        self.convolve1  = ManifoldAttentionNoAttn(
+        self.convolve1  = ManifoldAttentionNoAttnStage1(
                 config, d_model=config.n_embd, rank=16, K=3,
                 shift_rank=8, shrink_lambda=0.01,
                 causal=False, ar_rho=0.0, eps=1e-5, dropout=0.0,
                 use_layernorm=True
-            )
-        self.convolve2  = LocalSelfAttention(config)
-        self.enc1 = Cell(config.n_embd,config.n_embd*4)
-        self.enc2 = Cell(config.n_embd,config.n_embd*4)
-        self.dec1 = Cell(config.n_embd,config.n_embd*4)
-        self.dec2 = Cell(config.n_embd,config.n_embd*4)
-
-
+            )#low frequency patterns
+        #self.attn  = LocalSelfAttention(config)
+        self.convolve2  = ManifoldAttentionNoAttnStage2(
+                config, d_model=config.n_embd, rank=16, K=2,
+                shift_rank=8, shrink_lambda=0.01,
+                causal=False, ar_rho=0.0, eps=1e-5, dropout=0.0,
+                use_layernorm=True
+            )#higher frequency patterns
+        self.enc1 = Cell(config)
+        self.dec1 = Cell(config)
     
     def forward(self, x):
         z = self.ln(x)
-        z = self.distance(z)
+        z = z + self.distance(z)
         z1 = self.enc1(z)
-        z2 = self.enc2(z)
-        z1 = self.convolve1(z1)
-
-        z2 = self.convolve2(z2)
+        z1 = self.convolve2(self.convolve1(z1))
         z1 = self.dec1(z1)
-        z2 = self.dec2(z2)  
-        q = self.dec2(self.enc1(x)) - self.dec1(self.enc2(x)) 
-        return q + z1 + z2
+        return x + z1
 
 
         
@@ -953,7 +810,7 @@ class FixedEmbedding(nn.Module):
 @dataclass
 class GPTConfig:
     block_size: int = 1024
-    vocab_size: int = 66 
+    vocab_size: int = 66 # GPT-2 vocab_size of 50257, padded up to nearest multiple of 64 for efficiency
     n_layer: int = 12
     n_embd: int = 128
     n_experts:int = 4
@@ -961,7 +818,7 @@ class GPTConfig:
     bias: bool = True
     dropout: float = 0.1
 
-
+from matplotlib import pyplot as plt
     
         
 class GPT(nn.Module):
@@ -973,22 +830,26 @@ class GPT(nn.Module):
         self.n_embd = config.n_embd
 
         self.transformer = nn.ModuleDict(dict(
-            wte = FixedEmbedding(config.vocab_size, config.n_embd),
+            wte = FixedEmbedding(config.vocab_size, config.n_embd,seed=123),
             h = nn.ModuleList([AutoencoderBlock(config) for _ in range(config.n_layer)]),
 
         ))
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+
+
     
     # ---------- forward ----------
     def forward(self, idx, targets=None, eprint=False):
         device = idx.device
         b, t = idx.size()
-        x = self.transformer.wte(idx)
-        x = x.detach()                 
-        x.requires_grad_(True)         
-
+        x = self.transformer.wte(idx) 
+        x = x.detach()                 # sever any stale history just in case
+        x.requires_grad_(True)         # make x a grad leaf for τ at layer 0
         for i in range(self.config.n_layer):
-            x = self.transformer.h[i](x)  
+            x = self.transformer.h[i](x)
+
+
+
 
         if targets is not None:
             logits = self.lm_head(x)
