@@ -1,8 +1,6 @@
 #copyright joshuah.rainstar@gmail.com 2025
 #GPT framework from karapathy et al
 #various ideas and concepts annotated as i get to them
-#sep 9 2025: two-stage component isolation and mixing pipeline
-#intended to automate semantic selection and amplification at all stages
 from __future__ import annotations
 import math
 import typing
@@ -13,6 +11,53 @@ from dataclasses import dataclass
 from typing import Dict, Tuple,Optional, List
 
 
+class PairwiseRotSpiral(nn.Module):
+    def __init__(self, dim, radius=6.0, omega=1.0, k=1.0, step=0.1, cube_shell=False):
+        super().__init__()
+        self.dim = dim
+        self.radius = float(radius)
+        self.omega = float(omega)
+        self.k = float(k)
+        self.step = float(step)
+        self.cube_shell = bool(cube_shell)
+        self.eps = 1e-8
+
+    def _cos_sin(self, x):
+        theta = self.omega * self.step
+        # Use Python math for scalar, then create tensors on correct device and dtype
+        c = torch.tensor(math.cos(theta), device=x.device, dtype=x.dtype)
+        s = torch.tensor(math.sin(theta), device=x.device, dtype=x.dtype)
+        return c, s
+
+    def forward(self, x):
+        D = x.size(-1)
+        # radial term
+        r = torch.linalg.vector_norm(x, dim=-1, keepdim=True).clamp_min(self.eps)
+        radial = (self.radius - r) * (x / r)
+
+        # rotation on 2D pairs, vectorized
+        if D >= 2:
+            c, s = self._cos_sin(x)
+            n2 = D // 2
+            head = x[..., : n2 * 2].reshape(*x.shape[:-1], n2, 2)
+            xi = head[..., 0]
+            xj = head[..., 1]
+            yi = c * xi - s * xj
+            yj = s * xi + c * xj
+            rot = torch.stack([yi, yj], dim=-1).reshape(*x.shape[:-1], n2 * 2)
+            if D % 2 == 1:
+                y = torch.cat([rot, x[..., -1:].contiguous()], dim=-1)
+            else:
+                y = rot
+        else:
+            y = x
+
+        # one-step Euler update
+        y = x + self.step * ((y - x) + self.k * radial)
+
+        if self.cube_shell:
+            y = self.radius * torch.tanh(y / self.radius)
+        return y
         
 
 
