@@ -4,107 +4,53 @@
 #note: marginal gain from accumulating multiple RecurrentMLP products.
 #95% of work from first RMLP.
 #aug 32 2025: tweaks provide incremental gains across diverse problem set.
-
+import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import time
 
-class ComplexLinear(nn.Module):
-    def __init__(self, in_features: int, out_features: int, bias: bool = True, nonlinearity: str = "linear"):
+class Linear_Bilinear(nn.Module):
+    def __init__(self, dim_in: int, rank: int, hidden: int | None = None, q_frac: float = 0.6, alpha: float = 1.0):
         super().__init__()
-        self.in_features = in_features
-        self.out_features = out_features
-        self.weight = nn.Parameter(torch.empty(out_features, in_features, dtype=torch.complex64))
-        self.bias = nn.Parameter(torch.empty(out_features, dtype=torch.complex64)) if bias else None
-        self.reset_parameters(nonlinearity)
-
-    def reset_parameters(self, nonlinearity: str):
-        complex_kaiming_uniform_(self.weight, nonlinearity=nonlinearity)
-        if self.bias is not None:
-            complex_uniform_bias_(self.bias, self.in_features)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x: [..., in_features] complex
-        y = x.matmul(self.weight.t())
-        if self.bias is not None:
-            y = y + self.bias
-        return y
-
-class ComplexZLS(nn.Module):
-    """
-    Complex64-safe, phase-preserving ZLS.
-    f(z) = [softplus(|z|) - C * s(alpha |z|) * (1 - s(alpha |z|))] * z / |z|
-    with C = 4 * log(2). Define f(0) = 0.
-    Small-signal gain at 0 is 0.5 (like softplus).
-    """
-    def __init__(self, alpha: float = 0.5, eps: float = 1e-12, gain: float = 1.0):
-        super().__init__()
+        H = hidden or dim_in
+        self.D = dim_in
+        self.Dq = max(1, min(dim_in - 1, int(round(q_frac * dim_in))))
+        self.Dc = dim_in - self.Dq
+        self.r = rank
         self.alpha = float(alpha)
-        self.eps = float(eps)
-        self.gain = float(gain)
-        c_val = 4.0 * math.log(2.0)
-        self.register_buffer("_c", torch.tensor(c_val, dtype=torch.float32))
 
-    def forward(self, z: torch.Tensor) -> torch.Tensor:
-        if not torch.is_complex(z) or z.dtype != torch.complex64:
-            raise TypeError("RadialZLS expects complex64 input.")
-        r = z.abs()                              # float32
-        sp = F.softplus(r)                       # float32, stable
-        s = torch.sigmoid(self.alpha * r)        # float32
-        ba = s * (1.0 - s)                       # float32
-        c = self._c.to(device=z.device, dtype=r.dtype)
-        g = sp - c * ba                          # float32
-        # phase-preserving rescale; safe at r=0
-        scale = g / (r + self.eps)               # float32
-        y = z * scale.to(dtype=z.real.dtype)
-        if self.gain != 1.0:
-            y = y * self.gain
-        return y
-class ComplexCell(nn.Module):
-    def __init__(self, dim_in: int, hidden: int):
-        super().__init__()
-        self.fc1 = ComplexLinear(dim_in, hidden, bias=False, nonlinearity="relu")
-        self.act = ComplexZLS()
-        self.fc2 = ComplexLinear(hidden, dim_in, bias=True, nonlinearity="relu")
+        self.U = nn.Parameter(torch.randn(self.Dq, rank) / math.sqrt(self.Dq))
+        self.V = nn.Parameter(torch.randn(self.Dc, rank) / math.sqrt(self.Dc))
 
-    def forward(self, x):
-        return self.fc2(self.act(self.fc1(x)))
-
-class ComplexRecurrentMLP(nn.Module):
-    def __init__(self, dim_in: int, k: int = 2, hidden_scale: float = 4.0):
-        super().__init__()
-        hidden = int(dim_in * hidden_scale)
-        self.k = k
-        self.cells_a = nn.ModuleList([ComplexCell(dim_in, hidden) for _ in range(k)])
-
-    def forward(self, x):
-        z = x
-        for i in range(self.k):
-            z = z + self.cells_a[i](z)
-        return z
-    
-class Cell(nn.Module):
-    def __init__(self, dim_in: int, hidden: int):
-        super().__init__()
-        self.fc1 = nn.Linear(dim_in, hidden, bias=False) #dont change, false intentional
-        torch.nn.init.kaiming_uniform_(self.fc1.weight, nonlinearity='relu')
-        self.fc2 = nn.Linear(hidden, dim_in, bias=True)
-        torch.nn.init.kaiming_uniform_(self.fc2.weight, nonlinearity='relu')
+        self.W1 = nn.Linear(dim_in, H, bias=False)
+        self.B  = nn.Linear(rank,  H, bias=False)  # replaces W_out folded through W1
         self.act = nn.GELU()
-    def forward(self, x):
-        return self.fc2(self.act(self.fc1(x)))   
+        self.W2 = nn.Linear(H, dim_in, bias=True)
 
-class RecurrentMLP(nn.Module):
+    def forward(self, x):
+        x_q, x_c = x[:, :self.Dq], x[:, self.Dq:]
+        z = (x_q @ self.U) * (x_c @ self.V)  # [B, r]
+        h = self.act(self.W1(x) + self.alpha * self.B(z))
+        return self.W2(h)
+
+
+class BiMLP(nn.Module):
+    """
+    Input bilinear gate -> fc1(no bias) -> GELU -> fc2(with bias)
+    Hidden = 2 * D as in your baseline.
+    """
     def __init__(self, dim_in: int):
         super().__init__()
-        self.k = 2 #can set to 3, but marginal gains
-        self.hidden = dim_in*2 #if overfitting reduce to dim_in or even dim_in//2
-        self.cells_a = nn.ModuleList([Cell(dim_in, self.hidden) for _ in range(self.k)])
-    def forward(self, x):
-        z = x
-        for i in range(self.k):
-            z = z + self.cells_a[i](z)
-        return z
+        self.fc1 = Linear_Bilinear(dim_in, rank=dim_in//2, q_frac=0.6, alpha=1.0)
+        self.act = nn.GELU()
+        self.fc2 = nn.Linear(dim_in, dim_in, bias=True)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        h = self.act(self.fc1(x+1))-1
+        y = self.fc2(h)-1
+        return y
+
 
 #copyright joshuah rainstar 2025 joshuah.rainstar@gmail.com
 #A hash-based MOE is also powerful. However, it REALLY complains(takes a lot longer) if there are more than a few experts.
