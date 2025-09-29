@@ -22,6 +22,8 @@ class Wolf(Optimizer):
   #wolf is initially smoother than adam over difficult plateaus and at high LR.
   #In analysis, wolf trades axis-disentanglement for a slightly more linearly recoverable but less interpretable latent,
   # with only a mild hit to neighborhood preservation. using wolf can double as "weights encryption" :P
+  #some will say wolf is like lion. No- wolf comes before lion, and is somewhat dissimilar, 
+  #and isnt introduced by google stanford mit urbana meta openai etc and so doesnt get noticed 
   
 
   def __init__(self, params, lr=0.0024393612747612176, betas=(0.9, 0.999), eps=1e-8):
