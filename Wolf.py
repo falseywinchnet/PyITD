@@ -83,6 +83,65 @@ class Wolf(Optimizer):
     return loss
 
 
+#Should be same math but faster
+class WolfFast(Optimizer):
+    def __init__(self, params, lr=0.25, betas=(0.9, 0.999), eps=1e-8):
+        defaults = dict(lr=lr, betas=betas, eps=eps)
+        self.lr = lr
+        super().__init__(params, defaults)
+        self._etcerta = 0.367879441
+        self._et = 1.0 - self._etcerta
+        for group in self.param_groups:
+            for p in group["params"]:
+                state = self.state[p]
+                state["p"] = torch.zeros_like(p, memory_format=torch.preserve_format)
+                state["buf_update"] = torch.zeros_like(p, memory_format=torch.preserve_format)
+                state["buf_rand"] = torch.empty_like(p, memory_format=torch.preserve_format)
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
+
+        etcerta = self._etcerta
+        et = self._et
+        lr = self.lr
+
+        for group in self.param_groups:
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+
+                state = self.state[p]
+                exp_avg = state["p"]
+                grad = p.grad
+
+                # update = exp_avg*et + grad*etcerta  (into buf_update)
+                update = state["buf_update"]
+                update.copy_(exp_avg).mul_(et).add_(grad, alpha=etcerta)
+
+                # exp_avg = exp_avg*et + update*etcerta  (in-place on exp_avg)
+                # We recompute exp_avg*et first, then add update*etcerta
+                exp_avg.mul_(et).add_(update, alpha=etcerta)
+
+                # sign mask without sign(): (update*grad) > 0
+                mask = update.mul(grad) > 0  # new bool tensor
+
+                # Add multiplicative jitter in-place to update
+                rnd = state["buf_rand"]
+                rnd.uniform_(0.0, 1.0).mul_(2.0).add_(-1.0)   # [-1,1)
+                update.mul_(1.0 + etcerta * rnd)
+
+                # Elementwise mask (cast to update dtype), then single in-place add on params
+                m = mask.to(update.dtype)
+                update.mul_(m)
+                p.add_(update, alpha=-lr)
+
+        return loss
+
+
 
 import torch
 from torch.optim.optimizer import Optimizer
