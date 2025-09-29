@@ -22,7 +22,7 @@ class Wolf(Optimizer):
   #wolf is initially smoother than adam over difficult plateaus and at high LR.
   
 
-  def __init__(self, params, lr=0.024393612747612176, betas=(0.9, 0.999), eps=1e-8):
+  def __init__(self, params, lr=0.0024393612747612176, betas=(0.9, 0.999), eps=1e-8):
         # Define default parameters
         defaults = dict(lr=lr, betas=betas, eps=eps)
         self.lr = lr
