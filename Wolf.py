@@ -20,6 +20,8 @@ class Wolf(Optimizer):
   #Wolf, also called Rainstar Optimizer, is fast. it is resistant to valleys and other things where adam hangs.
   #on some problems, it is faster than adam. Try a high LR and lower it until it doesnt explode.
   #wolf is initially smoother than adam over difficult plateaus and at high LR.
+  #In analysis, wolf trades axis-disentanglement for a slightly more linearly recoverable but less interpretable latent,
+  # with only a mild hit to neighborhood preservation. using wolf can double as "weights encryption" :P
   
 
   def __init__(self, params, lr=0.0024393612747612176, betas=(0.9, 0.999), eps=1e-8):
@@ -83,7 +85,7 @@ class Wolf(Optimizer):
     return loss
 
 
-#Should be same math but faster
+#Should be same math but faster. not yet verified!
 class WolfFast(Optimizer):
     def __init__(self, params, lr=0.25, betas=(0.9, 0.999), eps=1e-8):
         defaults = dict(lr=lr, betas=betas, eps=eps)
