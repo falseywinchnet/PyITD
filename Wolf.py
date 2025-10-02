@@ -20,6 +20,8 @@ class Wolf(Optimizer):
   #Wolf, also called Rainstar Optimizer, is fast. it is resistant to valleys and other things where adam hangs.
   #on some problems, it is faster than adam. Try a high LR and lower it until it doesnt explode.
   #wolf is initially smoother than adam over difficult plateaus and at high LR.
+  #On nonconvex, curved valleys (Rosenbrock), Wolf keeps sharpness in check and finds a low-loss basin.
+  #On ill-conditioned quadratics, Wolf’s  dynamics don’t inherently temper the top-eigen direction; without adaptivity, it’s easy to step outside the stable region
   def __init__(self, params, lr=2e-3, betas=(0.9, 0.999), eps=1e-8):
         # Define default parameters
         defaults = dict(lr=lr, betas=betas, eps=eps)
