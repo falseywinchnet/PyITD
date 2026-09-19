@@ -75,9 +75,9 @@ def detect_peaks(x: list[float]):
     #eliminate redundant values
     return numpy.unique(ind)
 
-#TODO: implement end knots optional
-@numba.jit(numba.types.Tuple((numba.float64[:],numba.float64[:]))(numba.float64[:]))
-def itd_baseline_extract(data: list[numpy.float64])-> Tuple[numpy.ndarray, numpy.ndarray]:
+#left_bc / right_bc: 0=mean (legacy), 1=clamped (Restrepo), 2=free (Restrepo eq.6)
+@numba.jit(numba.types.Tuple((numba.float64[:],numba.float64[:]))(numba.float64[:],numba.int64,numba.int64))
+def itd_baseline_extract(data: list[numpy.float64], left_bc: int = 1, right_bc: int = 1)-> Tuple[numpy.ndarray, numpy.ndarray]:
 
         x = numpy.asarray(data,dtype=numpy.float64)
         rotation = numpy.zeros_like(x)
@@ -98,9 +98,20 @@ def itd_baseline_extract(data: list[numpy.float64])-> Tuple[numpy.ndarray, numpy
         extrema_indices[-1] = len(x) - 1
     
         baseline_knots = numpy.zeros(len(extrema_indices))
-        baseline_knots[0] = numpy.mean(x[:2])
-        baseline_knots[-1] = numpy.mean(x[-2:])
-        #also reflections possible, but should be treated with caution
+        # Left boundary
+        if left_bc == 0:
+            baseline_knots[0] = numpy.mean(x[:2])
+        elif left_bc == 1:
+            baseline_knots[0] = x[0]
+        elif left_bc == 2:
+            baseline_knots[0] = 0.5 * (x[0] + x[extrema_indices[1]])
+        # Right boundary
+        if right_bc == 0:
+            baseline_knots[-1] = numpy.mean(x[-2:])
+        elif right_bc == 1:
+            baseline_knots[-1] = x[-1]
+        elif right_bc == 2:
+            baseline_knots[-1] = 0.5 * (x[-1] + x[extrema_indices[-2]])
 
         #j = extrema_indices, k = k, baseline_knots = B, x =  τ
         for k in range(1, len(extrema_indices) - 1):
@@ -115,7 +126,8 @@ def itd_baseline_extract(data: list[numpy.float64])-> Tuple[numpy.ndarray, numpy
             baseline_new[extrema_indices[k]:extrema_indices[k + 1]] = baseline_knots[k]  + \
             (baseline_knots[k + 1] - baseline_knots[k]) / (x[extrema_indices[k + 1]] - x[extrema_indices[k]]) * \
             (x[extrema_indices[k]:extrema_indices[k + 1]] - x[extrema_indices[k]])
-    
+        baseline_new[-1] = baseline_knots[-1]
+
         rotation[:] = numpy.subtract(x, baseline_new)
 
         return rotation[:] , baseline_new[:]
@@ -154,7 +166,10 @@ class ITD:
 
     #logger = logging.getLogger(__name__)
 
-    def __init__(self, extrema_detection: str = "matlab"):
+    def __init__(self, extrema_detection: str = "matlab",
+                 end_condition: str = "clamped",
+                 left_bc: Optional[str] = None,
+                 right_bc: Optional[str] = None):
         """Initiate *ITD* instance.
         Parameters
         ----------
@@ -180,6 +195,14 @@ class ITD:
             "matlab",
         ), "Only 'simple', 'matlab', and 'parabol' values supported"
 
+        _ec_map = {"mean": 0, "clamped": 1, "free": 2}
+        left = left_bc if left_bc is not None else end_condition
+        right = right_bc if right_bc is not None else end_condition
+        assert left in _ec_map, f"left_bc must be one of {list(_ec_map.keys())}"
+        assert right in _ec_map, f"right_bc must be one of {list(_ec_map.keys())}"
+        self._left_bc_int = numpy.int64(_ec_map[left])
+        self._right_bc_int = numpy.int64(_ec_map[right])
+
         self.DTYPE = numpy.float64
 
         # Instance global declaration
@@ -187,7 +210,7 @@ class ITD:
         self.baselines = None  # Optional[numpy.ndarray]
 
     def __call__(self, S: numpy.ndarray, max_iterations: int = 12) -> numpy.ndarray:
-        return self.itd(S, max_iterations=max_iterations)
+        return self.itd(S, max_iteration=max_iterations)
     
     @staticmethod
     def _not_duplicate(S: numpy.ndarray) -> numpy.ndarray:
@@ -372,8 +395,7 @@ class ITD:
         imf = numpy.zeros(len(data), dtype=self.DTYPE)
         imf_old = numpy.nan
 
-        if S.shape != T.shape:
-            raise ValueError("Position or time array should be the same size as signal.")
+        # Shape check removed — S and T were undefined legacy references
 
         # Create arrays
         imfNo = 22
@@ -386,7 +408,7 @@ class ITD:
         rotation_ = numpy.zeros((len(data)),dtype=numpy.float64)
         baseline_ = numpy.zeros((len(data)),dtype=numpy.float64)
         r = numpy.zeros((len(data)),dtype=numpy.float64)
-        rotation_[:], baseline_[:] = itd_baseline_extract(numpy.transpose(numpy.asarray(data,dtype=numpy.float64))) 
+        rotation_[:], baseline_[:] = itd_baseline_extract(numpy.transpose(numpy.asarray(data,dtype=numpy.float64)), self._left_bc_int, self._right_bc_int)
         counter = 0
         while not finished:         
         #!e
@@ -428,7 +450,7 @@ class ITD:
             else: #results are sane, so perform an extraction.
                 rotations[counter,:] = rotation_[:]
                 baselines[counter,:] =  baseline_[:]
-                rotation_[:],  baseline_[:] = itd_baseline_extract(baseline_[:])
+                rotation_[:],  baseline_[:] = itd_baseline_extract(baseline_[:], self._left_bc_int, self._right_bc_int)
                 counter = counter + 1   
             #self.logger.debug("Baseline -- %s", counter)
 
